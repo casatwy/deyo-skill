@@ -1,0 +1,7 @@
+interface:
+  display_name: "Deyo"
+  short_description: "使用已安装的 deyo 命令发起链接转写，并完成一次性 API key 本地登录"
+  default_prompt: "Use $deyo to install, configure, or run the published deyo transcription CLI."
+
+policy:
+  allow_implicit_invocation: true
