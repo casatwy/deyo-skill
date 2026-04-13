@@ -150,6 +150,24 @@ Claude-side metadata (display name, default prompt, etc.) lives in `deyo/agents/
 
 See `deyo/agents/openai.yaml` and load `deyo/SKILL.md` through the Codex / OpenAI Agents skill registration flow.
 
+## Use With Gemini CLI
+
+Gemini CLI natively supports reading `SKILL.md` with frontmatter. You can install it via the following commands:
+
+User-level (available everywhere):
+
+```bash
+gemini skills install "$(pwd)/deyo" --scope user
+```
+
+Project-level (only inside one repo):
+
+```bash
+gemini skills install "$(realpath ./deyo)" --scope workspace
+```
+
+After installation, run `/skills reload` in an interactive Gemini CLI session to enable it. Additional notes are recorded in `deyo/agents/gemini.yaml`.
+
 ## Directory Layout
 
 ```text
@@ -160,11 +178,13 @@ skill_/
     ├── SKILL.md
     └── agents/
         ├── openai.yaml
-        └── claude.yaml
+        ├── claude.yaml
+        └── gemini.yaml
 ```
 
 ## Related Files
 
-- `deyo/SKILL.md`: main skill definition with usage conditions, rules, and examples (works for both Codex and Claude Code)
+- `deyo/SKILL.md`: main skill definition with usage conditions, rules, and examples (works for Codex, Claude Code, and Gemini CLI)
 - `deyo/agents/openai.yaml`: OpenAI Agents metadata — display name, short description, default prompt
 - `deyo/agents/claude.yaml`: Claude Code metadata — display name, install path, invocation notes
+- `deyo/agents/gemini.yaml`: Gemini CLI metadata — installation and integration notes

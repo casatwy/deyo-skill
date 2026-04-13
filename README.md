@@ -150,6 +150,24 @@ Claude 侧的元信息（display name、默认提示词等）记录在 `deyo/age
 
 参考 `deyo/agents/openai.yaml`，按 Codex / OpenAI Agents 的 skill 注册流程加载 `deyo/SKILL.md` 即可。
 
+## 在 Gemini CLI 中使用
+
+Gemini CLI 原生支持读取包含 frontmatter 的 `SKILL.md`。可以通过以下命令安装：
+
+用户级（全机可用）：
+
+```bash
+gemini skills install "$(pwd)/deyo" --scope user
+```
+
+项目级（只在当前仓库可用）：
+
+```bash
+gemini skills install "$(realpath ./deyo)" --scope workspace
+```
+
+安装后，请在 Gemini 交互式会话中执行 `/skills reload` 使其生效。相关说明记录在 `deyo/agents/gemini.yaml`。
+
 ## 目录结构
 
 ```text
@@ -160,11 +178,13 @@ skill_/
     ├── SKILL.md
     └── agents/
         ├── openai.yaml
-        └── claude.yaml
+        ├── claude.yaml
+        └── gemini.yaml
 ```
 
 ## 相关文件
 
-- `deyo/SKILL.md`：skill 的主说明文件，定义适用场景、规则和示例（同时兼容 Codex 与 Claude Code）
+- `deyo/SKILL.md`：skill 的主说明文件，定义适用场景、规则和示例（同时兼容 Codex、Claude Code 与 Gemini CLI）
 - `deyo/agents/openai.yaml`：OpenAI Agents 侧的显示名、简述和默认提示词配置
 - `deyo/agents/claude.yaml`：Claude Code 侧的显示名、安装路径与触发方式说明
+- `deyo/agents/gemini.yaml`：Gemini CLI 侧的安装说明及相关元信息说明
