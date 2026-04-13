@@ -1,0 +1,20 @@
+{
+  "name": "deyo",
+  "version": "0.1.0",
+  "description": "Official Deyo transcription skill for Claude Code.",
+  "author": {
+    "name": "Deyo",
+    "url": "https://deyo.miaobi.fun"
+  },
+  "homepage": "https://deyo.miaobi.fun/ai/install/claude",
+  "repository": "https://github.com/casatwy/deyo-skill",
+  "license": "UNLICENSED",
+  "keywords": [
+    "deyo",
+    "transcription",
+    "cli",
+    "subtitle",
+    "claude-code"
+  ],
+  "skills": "./"
+}

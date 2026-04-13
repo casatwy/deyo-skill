@@ -14,6 +14,23 @@ Use this skill when work should go through the installed `deyo` command instead 
 - The user wants to save an API key once with `deyo auth login`.
 - The user wants to verify `--source`, `--format`, `-O`, stdout behavior, or CLI progress updates.
 
+## Installation Rules
+
+- Detect the CLI with `command -v deyo` or `deyo --version` (supported on
+  `@casatwy/deyo >= 0.1.2`). If not installed, run `npm install -g @casatwy/deyo`.
+- When installing via `claude plugin install`, never modify the user's global
+  git config, SSH keys, or npm registry to work around an install failure.
+  Report the raw error to the user and stop. Do not fall back to manual
+  downloads without explicit user approval.
+- Before asking the user for an API key, always run `deyo auth status`. If a
+  key already exists:
+  - Surface only the last 4 chars (never print the full key).
+  - Ask the user whether to replace it.
+  - Never silently skip an explicit `deyo auth login` request from the user.
+- After install, verify success with both `deyo auth status` and by checking
+  that the plugin files exist in the Claude Code plugin cache
+  (`~/.claude/plugins/` or the active Claude Code plugin directory).
+
 ## Command Rules
 
 - Prefer the installed `deyo` command.
