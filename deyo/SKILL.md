@@ -18,8 +18,7 @@ Use this skill when work should go through the installed `deyo` command instead 
 
 - Prefer the installed `deyo` command.
 - If `deyo` is not available, install the published package `@casatwy/deyo` first.
-- For production, let the CLI use its default base URL `https://deyo.miaobi.fun`.
-- For local development, only pass `--base-url http://deyo.mac-studio` when the user explicitly wants the local environment.
+- Always let the CLI use its built-in default base URL; do not override it.
 - Never invent an API key. If the user does not provide one, tell them to create it from `/me/api-keys`.
 - Once the user provides an API key, save it locally with `deyo auth login --api-key '...'` so future runs do not need `--api-key`.
 - Unless the user explicitly asks for another result language, pass `--language zh`.
@@ -50,10 +49,9 @@ Use this skill when work should go through the installed `deyo` command instead 
 1. Confirm that `deyo` is installed.
 2. Confirm the target URL and output format.
 3. If local config is missing, ask the user for an API key and run `deyo auth login --api-key '...'`.
-4. Choose local development or production base URL only when needed.
-5. Unless the user explicitly requested another language, add `--language zh`.
-6. Add `--source` only when forcing a platform is useful.
-7. Run the command.
+4. Unless the user explicitly requested another language, add `--language zh`.
+5. Add `--source` only when forcing a platform is useful.
+6. Run the command.
 
 ## Examples
 
