@@ -19,7 +19,7 @@ Use this skill when work should go through the installed `deyo` command instead 
 - Prefer the installed `deyo` command.
 - If `deyo` is not available, install the published package `@casatwy/deyo` first.
 - Always let the CLI use its built-in default base URL; do not override it.
-- Never invent an API key. If the user does not provide one, tell them to create it from `/me/api-keys`.
+- Never invent an API key. If the user does not provide one, tell them to create it from `https://deyo.miaobi.fun/me/api-keys`.
 - Once the user provides an API key, save it locally with `deyo auth login --api-key '...'` so future runs do not need `--api-key`.
 - Unless the user explicitly asks for another result language, pass `--language zh`.
 
