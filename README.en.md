@@ -2,9 +2,11 @@
 
 [中文版](./README.md)
 
-`deyo` is a Codex / OpenAI Agents skill that tells the agent to use the installed `deyo` CLI for link transcription work instead of the web UI.
+`deyo` is a skill for both **Codex / OpenAI Agents** and **Claude Code** that tells the agent to use the installed `deyo` CLI for link transcription work instead of the web UI.
 
 It documents how to install the CLI, save an API key once, inspect local auth state, build transcription commands, and troubleshoot common failures.
+
+`deyo/SKILL.md` uses frontmatter that is compatible with both Codex and Claude Code skill conventions, so both platforms share the same main definition file. Only the per-platform metadata under `agents/` is split.
 
 ## When To Use
 
@@ -118,6 +120,36 @@ deyo --language zh --format json 'https://www.bilibili.com/video/BVxxxx'
 - `剩余分钟不足`: the current account does not have enough minute balance
 - If the user reports missing progress updates, verify that they are using the current published CLI and that the task is not a direct-subtitle-return case
 
+## Use With Claude Code
+
+Claude Code loads skills from `~/.claude/skills/<name>/SKILL.md`. The `deyo/SKILL.md` in this repo already follows that convention. You can install it in two ways:
+
+User-level (available everywhere):
+
+```bash
+mkdir -p ~/.claude/skills
+ln -snf "$(pwd)/deyo" ~/.claude/skills/deyo
+```
+
+Project-level (only inside one repo):
+
+```bash
+mkdir -p .claude/skills
+ln -snf "$(realpath ./deyo)" .claude/skills/deyo
+```
+
+Once installed, Claude Code will suggest the skill automatically in matching scenarios. You can also invoke it explicitly:
+
+```text
+/deyo turn this YouTube link into a Chinese SRT
+```
+
+Claude-side metadata (display name, default prompt, etc.) lives in `deyo/agents/claude.yaml`, parallel to `openai.yaml` and independent from it.
+
+## Use With Codex / OpenAI Agents
+
+See `deyo/agents/openai.yaml` and load `deyo/SKILL.md` through the Codex / OpenAI Agents skill registration flow.
+
 ## Directory Layout
 
 ```text
@@ -127,10 +159,12 @@ skill_/
 └── deyo/
     ├── SKILL.md
     └── agents/
-        └── openai.yaml
+        ├── openai.yaml
+        └── claude.yaml
 ```
 
 ## Related Files
 
-- `deyo/SKILL.md`: main skill definition with usage conditions, rules, and examples
-- `deyo/agents/openai.yaml`: OpenAI Agents metadata including display name, short description, and default prompt
+- `deyo/SKILL.md`: main skill definition with usage conditions, rules, and examples (works for both Codex and Claude Code)
+- `deyo/agents/openai.yaml`: OpenAI Agents metadata — display name, short description, default prompt
+- `deyo/agents/claude.yaml`: Claude Code metadata — display name, install path, invocation notes

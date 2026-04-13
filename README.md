@@ -2,9 +2,11 @@
 
 [English Version](./README.en.md)
 
-`deyo` 是一个面向 Codex / OpenAI Agents 的 skill，用来指导代理优先通过已安装的 `deyo` 命令行工具完成链接转写，而不是走网页界面。
+`deyo` 是一个同时面向 **Codex / OpenAI Agents** 和 **Claude Code** 的 skill，用来指导代理优先通过已安装的 `deyo` 命令行工具完成链接转写，而不是走网页界面。
 
 它覆盖了 `deyo` CLI 的安装、一次性 API key 登录、本地配置检查、链接转写命令拼装，以及常见故障处理规则。
+
+`deyo/SKILL.md` 的 frontmatter 同时兼容 Codex 和 Claude Code 的 skill 规范，两边复用同一份主说明文件，仅 `agents/` 下的元信息按平台拆分。
 
 ## 适用场景
 
@@ -118,6 +120,36 @@ deyo --language zh --format json 'https://www.bilibili.com/video/BVxxxx'
 - `剩余分钟不足`：当前账号分钟余额不足
 - 如果用户反馈没有进度更新，先确认其使用的是当前已发布 CLI，且任务不是直接返回字幕的场景
 
+## 在 Claude Code 中使用
+
+Claude Code 会从 `~/.claude/skills/<name>/SKILL.md` 加载 skill，本仓库的 `deyo/SKILL.md` 已符合该规范，安装方式有两种：
+
+用户级（全机可用）：
+
+```bash
+mkdir -p ~/.claude/skills
+ln -snf "$(pwd)/deyo" ~/.claude/skills/deyo
+```
+
+项目级（只在当前仓库可用）：
+
+```bash
+mkdir -p .claude/skills
+ln -snf "$(realpath ./deyo)" .claude/skills/deyo
+```
+
+安装完成后，Claude Code 会在匹配场景中自动建议调用，也可以显式触发：
+
+```text
+/deyo 帮我把这个 YouTube 链接转成中文 SRT
+```
+
+Claude 侧的元信息（display name、默认提示词等）记录在 `deyo/agents/claude.yaml`，与 `openai.yaml` 平行，互不影响。
+
+## 在 Codex / OpenAI Agents 中使用
+
+参考 `deyo/agents/openai.yaml`，按 Codex / OpenAI Agents 的 skill 注册流程加载 `deyo/SKILL.md` 即可。
+
 ## 目录结构
 
 ```text
@@ -127,10 +159,12 @@ skill_/
 └── deyo/
     ├── SKILL.md
     └── agents/
-        └── openai.yaml
+        ├── openai.yaml
+        └── claude.yaml
 ```
 
 ## 相关文件
 
-- `deyo/SKILL.md`：skill 的主说明文件，定义适用场景、规则和示例
+- `deyo/SKILL.md`：skill 的主说明文件，定义适用场景、规则和示例（同时兼容 Codex 与 Claude Code）
 - `deyo/agents/openai.yaml`：OpenAI Agents 侧的显示名、简述和默认提示词配置
+- `deyo/agents/claude.yaml`：Claude Code 侧的显示名、安装路径与触发方式说明
