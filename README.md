@@ -2,11 +2,11 @@
 
 [English Version](./README.en.md)
 
-`deyo` 是一个同时面向 **Codex / OpenAI Agents** 和 **Claude Code** 的 skill，用来指导代理优先通过已安装的 `deyo` 命令行工具完成链接转写，而不是走网页界面。
+`deyo` 是一个同时面向 **Codex / OpenAI Agents**、**Claude Code** 和 **OpenClaw** 的 skill，用来指导代理优先通过已安装的 `deyo` 命令行工具完成链接转写，而不是走网页界面。
 
 它覆盖了 `deyo` CLI 的安装、一次性 API key 登录、本地配置检查、链接转写命令拼装，以及常见故障处理规则。
 
-`deyo/SKILL.md` 的 frontmatter 同时兼容 Codex 和 Claude Code 的 skill 规范，两边复用同一份主说明文件，仅 `agents/` 下的元信息按平台拆分。
+`deyo/SKILL.md` 复用同一份主说明文件，同时兼容 Codex / OpenAI Agents、Claude Code 和 OpenClaw 所使用的 skill 规范，仅 `agents/` 下的元信息按平台拆分。
 
 ## 适用场景
 
@@ -150,6 +150,50 @@ Claude 侧的元信息（display name、默认提示词等）记录在 `deyo/age
 
 参考 `deyo/agents/openai.yaml`，按 Codex / OpenAI Agents 的 skill 注册流程加载 `deyo/SKILL.md` 即可。
 
+## 在 OpenClaw / ClawHub 中使用
+
+如果你已经在使用 OpenClaw，推荐优先用它自带的 `openclaw skills` 命令从 ClawHub 安装 `deyo`。ClawHub 是 OpenClaw 的公开 skill 注册表；如果你只想单独搜索或备用安装，也可以直接使用 `clawhub` CLI。
+
+先确保机器上已经有 `deyo` 命令：
+
+```bash
+npm install -g @casatwy/deyo
+```
+
+推荐方式：在当前 workspace 安装 skill：
+
+```bash
+openclaw skills search "deyo"
+openclaw skills install deyo
+```
+
+安装后，执行一次 API key 登录：
+
+```bash
+deyo auth login --api-key 'deyo_sk_xxx'
+```
+
+后续更新所有已安装 skills：
+
+```bash
+openclaw skills update --all
+```
+
+如果你更偏向单独使用 ClawHub CLI，也可以这样做：
+
+```bash
+npm install -g clawhub
+
+clawhub search "deyo"
+clawhub install deyo
+```
+
+安装完成后，就可以在 OpenClaw 对话里直接提需求，例如：
+
+```text
+用 deyo 把这个 YouTube 链接转成中文 SRT
+```
+
 ## 在 Gemini CLI 中使用
 
 Gemini CLI 原生支持读取包含 frontmatter 的 `SKILL.md`。可以通过以下命令安装：
@@ -184,7 +228,7 @@ skill_/
 
 ## 相关文件
 
-- `deyo/SKILL.md`：skill 的主说明文件，定义适用场景、规则和示例（同时兼容 Codex、Claude Code 与 Gemini CLI）
+- `deyo/SKILL.md`：skill 的主说明文件，定义适用场景、规则和示例（同时兼容 Codex、Claude Code、OpenClaw 与 Gemini CLI）
 - `deyo/agents/openai.yaml`：OpenAI Agents 侧的显示名、简述和默认提示词配置
 - `deyo/agents/claude.yaml`：Claude Code 侧的显示名、安装路径与触发方式说明
 - `deyo/agents/gemini.yaml`：Gemini CLI 侧的安装说明及相关元信息说明

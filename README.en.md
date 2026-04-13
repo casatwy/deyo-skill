@@ -2,11 +2,11 @@
 
 [中文版](./README.md)
 
-`deyo` is a skill for both **Codex / OpenAI Agents** and **Claude Code** that tells the agent to use the installed `deyo` CLI for link transcription work instead of the web UI.
+`deyo` is a skill for **Codex / OpenAI Agents**, **Claude Code**, and **OpenClaw** that tells the agent to use the installed `deyo` CLI for link transcription work instead of the web UI.
 
 It documents how to install the CLI, save an API key once, inspect local auth state, build transcription commands, and troubleshoot common failures.
 
-`deyo/SKILL.md` uses frontmatter that is compatible with both Codex and Claude Code skill conventions, so both platforms share the same main definition file. Only the per-platform metadata under `agents/` is split.
+`deyo/SKILL.md` is a shared main definition file that works with Codex / OpenAI Agents, Claude Code, and OpenClaw skill conventions. Only the per-platform metadata under `agents/` is split.
 
 ## When To Use
 
@@ -150,6 +150,50 @@ Claude-side metadata (display name, default prompt, etc.) lives in `deyo/agents/
 
 See `deyo/agents/openai.yaml` and load `deyo/SKILL.md` through the Codex / OpenAI Agents skill registration flow.
 
+## Use With OpenClaw / ClawHub
+
+If you already use OpenClaw, prefer its native `openclaw skills` commands to install `deyo` from ClawHub. ClawHub is the public skill registry for OpenClaw. If you only want search or a fallback install path, you can also use the standalone `clawhub` CLI directly.
+
+First make sure the machine already has the `deyo` command:
+
+```bash
+npm install -g @casatwy/deyo
+```
+
+Recommended flow: install the skill into the current workspace:
+
+```bash
+openclaw skills search "deyo"
+openclaw skills install deyo
+```
+
+After installation, save the API key once:
+
+```bash
+deyo auth login --api-key 'deyo_sk_xxx'
+```
+
+To update all installed skills later:
+
+```bash
+openclaw skills update --all
+```
+
+If you prefer the standalone ClawHub CLI, you can also do:
+
+```bash
+npm install -g clawhub
+
+clawhub search "deyo"
+clawhub install deyo
+```
+
+Once installed, you can ask OpenClaw directly, for example:
+
+```text
+Use deyo to turn this YouTube link into a Chinese SRT
+```
+
 ## Use With Gemini CLI
 
 Gemini CLI natively supports reading `SKILL.md` with frontmatter. You can install it via the following commands:
@@ -184,7 +228,7 @@ skill_/
 
 ## Related Files
 
-- `deyo/SKILL.md`: main skill definition with usage conditions, rules, and examples (works for Codex, Claude Code, and Gemini CLI)
+- `deyo/SKILL.md`: main skill definition with usage conditions, rules, and examples (works for Codex, Claude Code, OpenClaw, and Gemini CLI)
 - `deyo/agents/openai.yaml`: OpenAI Agents metadata — display name, short description, default prompt
 - `deyo/agents/claude.yaml`: Claude Code metadata — display name, install path, invocation notes
 - `deyo/agents/gemini.yaml`: Gemini CLI metadata — installation and integration notes
