@@ -4,7 +4,7 @@
 
 `deyo` 是一个同时面向 **Codex / OpenAI Agents**、**Claude Code** 和 **OpenClaw** 的 skill，用来指导代理优先通过已安装的 `deyo` 命令行工具完成链接转写，而不是走网页界面。
 
-它覆盖了 `deyo` CLI 的安装、一次性 API key 登录、本地配置检查、链接转写命令拼装，以及常见故障处理规则。
+它覆盖了 `deyo` CLI 的安装、一次性 API key 登录、本地配置检查、链接转写命令拼装、AI 可见进度同步，以及常见故障处理规则。
 
 `deyo/SKILL.md` 复用同一份主说明文件，同时兼容 Codex / OpenAI Agents、Claude Code 和 OpenClaw 所使用的 skill 规范，仅 `agents/` 下的元信息按平台拆分。
 
@@ -15,17 +15,20 @@
 - 用户想安装或配置 `deyo`
 - 用户想通过 `deyo` 转写一个链接
 - 用户想保存一次 API key，避免后续每次重复传参
-- 用户想确认 `--source`、`--format`、`-O`、stdout 输出或进度行为
+- 用户想确认 `--source`、`--format`、`-O`、stdout 输出、CLI 进度或 AI 对话里的进度播报行为
 
 ## 核心规则
 
 - 优先使用系统里已安装的 `deyo` 命令
-- 如果 `deyo` 不存在，先安装已发布包 `@casatwy/deyo`
+- 如果 `deyo` 不存在，或 `deyo --help` 里还没有 `--progress-format`，先安装或升级已发布包 `@casatwy/deyo`
 - 生产环境默认使用 CLI 自带的服务地址 `https://deyo.miaobi.fun`
 - 只有用户明确要求本地开发环境时，才传 `--base-url http://deyo.mac-studio`
 - 不要虚构 API key；如果用户没有提供，要求用户先到 `/me/api-keys` 创建
 - 用户提供 API key 后，用 `deyo auth login --api-key '...'` 保存到本地，方便后续复用
 - 除非用户明确要求其他结果语言，否则默认追加 `--language zh`
+- 只要是 AI 代跑且可能持续一段时间的转写任务，默认追加 `--progress-format jsonl`
+- AI 不要把原始 JSONL 直接贴给用户，而是要把任务创建、状态切换、关键百分比和最终结果转述给用户
+- 如果 `task.created` 表示 `mode: subtitles` 或 `resultReady: true`，要明确告诉用户这是“直接命中字母/字幕”，不会进入长时间转写
 
 ## 命令速查
 
@@ -56,7 +59,7 @@ deyo auth logout
 执行转写：
 
 ```bash
-deyo [--source <name>] [--language <value>] [--format <value>] [-O <path>] <url>
+deyo [--source <name>] [--language <value>] [--format <value>] [--progress-format <value>] [-O <path>] <url>
 ```
 
 ## 输出规则
@@ -68,17 +71,22 @@ deyo [--source <name>] [--language <value>] [--format <value>] [-O <path>] <url>
 - `.vtt -> vtt`
 - `.json -> json`
 - 进度和状态信息写入 stderr
-- 当上游任务进入 `transcribing` 阶段后，CLI 会在单行终端内原地刷新进度
+- `--progress-format auto` 是默认值
+- 当 stderr 是 TTY 时，`auto` 会保留当前的单行原地刷新体验
+- 当 stderr 不是 TTY 时，`auto` 会退化成逐行文本进度，避免输出控制字符污染日志或代理输出
+- `--progress-format jsonl` 会在 stderr 上输出一行一个 JSON 事件，适合 AI 读取并向用户转述
 
 ## 推荐工作流
 
 1. 先确认机器上是否已安装 `deyo`
-2. 确认目标链接、输出格式和输出路径
-3. 如果本地尚未登录，向用户索取 API key 并执行 `deyo auth login`
-4. 仅在需要时区分生产环境或本地开发环境
-5. 除非用户明确指定其他语言，否则追加 `--language zh`
-6. 仅在强制指定平台有帮助时才加 `--source`
-7. 运行最终命令
+2. 先用 `deyo --help` 确认本机 CLI 已支持 `--progress-format`
+3. 确认目标链接、输出格式和输出路径
+4. 如果本地尚未登录，向用户索取 API key 并执行 `deyo auth login`
+5. 仅在需要时区分生产环境或本地开发环境
+6. 除非用户明确指定其他语言，否则追加 `--language zh`
+7. 仅在强制指定平台有帮助时才加 `--source`
+8. AI 代跑长任务时追加 `--progress-format jsonl`
+9. 运行最终命令，并把任务创建、状态切换、关键百分比与最终结果同步给用户
 
 ## 示例
 
@@ -100,6 +108,12 @@ deyo auth login --api-key 'deyo_sk_xxx'
 deyo --language zh -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
+AI 友好的结构化进度模式：
+
+```bash
+deyo --language zh --progress-format jsonl -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
+```
+
 强制使用 YouTube 源并导出 SRT：
 
 ```bash
@@ -118,7 +132,9 @@ deyo --language zh --format json 'https://www.bilibili.com/video/BVxxxx'
 - `缺少 API key。请传 --api-key、设置 DEYO_API_KEY，或先执行 deyo auth login`：让用户先在 `/me/api-keys` 创建 key，再执行 `deyo auth login`
 - `API key 无效或不存在`：要求用户重新生成有效 key
 - `剩余分钟不足`：当前账号分钟余额不足
-- 如果用户反馈没有进度更新，先确认其使用的是当前已发布 CLI，且任务不是直接返回字幕的场景
+- 如果用户反馈没有进度更新，先确认 `deyo --help` 是否已经包含 `--progress-format`；如果没有，先升级 CLI
+- 如果任务创建后很快结束，优先判断是否是直接返回字幕的场景，而不是长时间转写链路
+- 如果中途丢失实时进度，留意 CLI 是否输出了“事件流中断，回退到轮询状态”的提示
 
 ## 在 Claude Code 中使用
 

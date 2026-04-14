@@ -4,7 +4,7 @@
 
 `deyo` is a skill for **Codex / OpenAI Agents**, **Claude Code**, and **OpenClaw** that tells the agent to use the installed `deyo` CLI for link transcription work instead of the web UI.
 
-It documents how to install the CLI, save an API key once, inspect local auth state, build transcription commands, and troubleshoot common failures.
+It documents how to install the CLI, save an API key once, inspect local auth state, build transcription commands, keep users updated with AI-visible progress, and troubleshoot common failures.
 
 `deyo/SKILL.md` is a shared main definition file that works with Codex / OpenAI Agents, Claude Code, and OpenClaw skill conventions. Only the per-platform metadata under `agents/` is split.
 
@@ -15,17 +15,20 @@ Use this skill when:
 - The user wants to install or configure `deyo`
 - The user wants to transcribe a link with `deyo`
 - The user wants to save an API key once and reuse it later
-- The user wants to verify `--source`, `--format`, `-O`, stdout behavior, or progress behavior
+- The user wants to verify `--source`, `--format`, `-O`, stdout behavior, CLI progress behavior, or chat-visible progress behavior
 
 ## Core Rules
 
 - Prefer the installed `deyo` command
-- If `deyo` is missing, install the published package `@casatwy/deyo` first
+- If `deyo` is missing, or `deyo --help` does not list `--progress-format`, install or upgrade the published package `@casatwy/deyo` first
 - In production, use the CLI default service URL `https://deyo.miaobi.fun`
 - Only pass `--base-url http://deyo.mac-studio` when the user explicitly wants local development
 - Never invent an API key; if the user does not provide one, ask them to create it from `/me/api-keys`
 - Once the user provides an API key, save it locally with `deyo auth login --api-key '...'`
 - Unless the user explicitly requests another output language, default to `--language zh`
+- For agent-run transcription tasks that may take more than a moment, default to `--progress-format jsonl`
+- Do not dump raw JSONL progress to the user; read it and relay concise status updates instead
+- If `task.created` reports `mode: subtitles` or `resultReady: true`, tell the user that usable subtitles were returned directly and no long transcription job is needed
 
 ## Command Reference
 
@@ -56,7 +59,7 @@ deyo auth logout
 Run a transcription:
 
 ```bash
-deyo [--source <name>] [--language <value>] [--format <value>] [-O <path>] <url>
+deyo [--source <name>] [--language <value>] [--format <value>] [--progress-format <value>] [-O <path>] <url>
 ```
 
 ## Output Behavior
@@ -68,17 +71,22 @@ deyo [--source <name>] [--language <value>] [--format <value>] [-O <path>] <url>
 - `.vtt -> vtt`
 - `.json -> json`
 - Progress and status messages are written to stderr
-- Once the upstream task enters `transcribing`, the CLI refreshes progress in place on a single terminal line
+- `--progress-format auto` is the default
+- With TTY stderr, `auto` keeps the current in-place single-line progress refresh
+- With non-TTY stderr, `auto` falls back to line-based text progress so logs and agent output do not get polluted by control characters
+- `--progress-format jsonl` emits one JSON object per stderr line and is the preferred mode for AI agents that must keep users updated
 
 ## Recommended Workflow
 
 1. Confirm that `deyo` is installed
-2. Confirm the target URL, output format, and output path
-3. If local auth is missing, ask the user for an API key and run `deyo auth login`
-4. Only choose between production and local development when needed
-5. Unless the user explicitly asks for another language, add `--language zh`
-6. Add `--source` only when forcing a platform is useful
-7. Run the final command
+2. Confirm that `deyo --help` includes `--progress-format`
+3. Confirm the target URL, output format, and output path
+4. If local auth is missing, ask the user for an API key and run `deyo auth login`
+5. Only choose between production and local development when needed
+6. Unless the user explicitly asks for another language, add `--language zh`
+7. Add `--source` only when forcing a platform is useful
+8. For agent-run long tasks, add `--progress-format jsonl`
+9. Run the final command and relay task creation, status changes, key progress milestones, and the final outcome to the user
 
 ## Examples
 
@@ -100,6 +108,12 @@ Write a Chinese text file:
 deyo --language zh -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
+Agent-friendly machine-readable progress:
+
+```bash
+deyo --language zh --progress-format jsonl -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
+```
+
 Force YouTube and export SRT:
 
 ```bash
@@ -118,7 +132,9 @@ deyo --language zh --format json 'https://www.bilibili.com/video/BVxxxx'
 - `缺少 API key。请传 --api-key、设置 DEYO_API_KEY，或先执行 deyo auth login`: ask the user to create a key from `/me/api-keys`, then run `deyo auth login`
 - `API key 无效或不存在`: ask the user to generate a new valid key
 - `剩余分钟不足`: the current account does not have enough minute balance
-- If the user reports missing progress updates, verify that they are using the current published CLI and that the task is not a direct-subtitle-return case
+- If the user reports missing progress updates, verify that `deyo --help` includes `--progress-format`; if not, upgrade the published CLI first
+- If a task ends almost immediately, check whether it was a direct-subtitle-return case rather than a long transcription path
+- If live progress stops mid-run, check whether the CLI emitted an SSE fallback notice
 
 ## Use With Claude Code
 

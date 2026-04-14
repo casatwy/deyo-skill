@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
-  short_description: "使用已安装的 deyo 命令发起链接转写，并完成一次性 API key 本地登录"
-  default_prompt: "Use the deyo skill to install, configure, or run the published deyo transcription CLI."
+  short_description: "使用已安装的 deyo 命令发起链接转写，并在执行过程中向用户同步任务进度"
+  default_prompt: "Use the deyo skill to install, configure, or run the published deyo transcription CLI, and keep the user updated on task progress."
 
 # Claude Code 通过 ~/.claude/skills/<name>/SKILL.md 加载 skill。
 # 本文件用于与 deyo/agents/openai.yaml 保持平行结构，记录 Claude 侧的元信息。
