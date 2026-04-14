@@ -43,6 +43,10 @@ Use this skill when work should go through the installed `deyo` command instead 
 - For agent-run transcriptions that may take more than a moment, add `--progress-format jsonl`.
 - Do not paste raw JSONL progress to the user unless they explicitly ask for it.
   Read the progress events and relay concise natural-language updates instead.
+- After the transcription is fully complete, automatically add punctuation and
+  paragraph breaks before presenting plain-text transcript content to the user,
+  and before saving plain-text transcript content to a file, unless the user
+  explicitly asks for raw output.
 - Always surface these milestones to the user:
   - task creation
   - status changes
@@ -88,6 +92,10 @@ Use this skill when work should go through the installed `deyo` command instead 
 7. For agent-run long tasks, add `--progress-format jsonl`.
 8. Run the command.
 9. While the command runs, relay task creation, status changes, key progress steps, and the final outcome to the user.
+10. After completion, if you are returning plain-text transcript content to the
+    user or saving plain-text transcript content to a file, add punctuation and
+    paragraph breaks automatically unless the user explicitly asked for raw
+    output.
 
 ## Examples
 
