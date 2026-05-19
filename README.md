@@ -1,3 +1,7 @@
+# Deyo 网址
+
+播客和视频转文字稿： [https://deyo.miaobi.fun](https://deyo.miaobi.fun)
+
 # Deyo Skill
 
 [English Version](./README.en.md)
