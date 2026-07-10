@@ -1,13 +1,15 @@
 interface:
   display_name: "Deyo"
-  short_description: "使用已安装的 deyo 命令发起链接或本地音视频文件转写，并在执行过程中向用户同步任务进度"
-  default_prompt: "Use the deyo skill to install, configure, or run the published deyo transcription CLI for links or local audio/video files, and keep the user updated on upload, media-check, task, and transcription progress."
+  short_description: "用 deyo CLI 转写链接或本地音视频，处理 API key、格式、进度与排查"
+  default_prompt: "Use the deyo skill to install or run the deyo CLI for link transcription or a single local media upload, configure API key auth, choose text/SRT/VTT/JSON output, use jsonl progress, use --base-url http://deyo.mac-studio only for explicit local/dev requests, and troubleshoot common failures."
 
-# Claude Code 通过 ~/.claude/skills/<name>/SKILL.md 加载 skill。
+# Claude 当前主路径是通过 Deyo 官方 marketplace 安装 plugin。
+# legacy ~/.claude/skills 只作为备用安装路径。
 # 本文件用于与 deyo/agents/openai.yaml 保持平行结构，记录 Claude 侧的元信息。
 claude_code:
   skill_id: "deyo"
-  skill_path: "~/.claude/skills/deyo/SKILL.md"
+  primary_install: "claude plugin marketplace add <Deyo marketplace URL> && claude plugin install deyo@deyo-official"
+  fallback_skill_path: "~/.claude/skills/deyo/SKILL.md"
   invocation:
     # Claude Code 主要靠 SKILL.md 的 frontmatter description 触发，
     # 用户也可以通过 /deyo 直接显式调用。
@@ -17,8 +19,10 @@ claude_code:
     - Bash
   notes:
     - "SKILL.md 的 frontmatter 已符合 Claude Code skill 规范，无需额外转换。"
-    - "安装方式：将 deyo/ 目录复制或软链到 ~/.claude/skills/deyo/。"
-    - "若希望全项目共享，也可以放到项目内的 .claude/skills/deyo/。"
+    - "当前推荐安装方式：先添加 Deyo 官方 marketplace，再安装 deyo plugin。"
+    - "legacy 备用方式：将 deyo/ 目录复制或软链到 ~/.claude/skills/deyo/；项目级 .claude/skills/deyo/ 也只作为备用。"
+    - "Claude plugin cache 检查只适用于 Claude 插件安装场景；legacy skill 安装不要求检查 plugin cache。"
+    - "如果 claude plugin install 失败，保留原始错误并停止，不要修改全局 git、SSH 或 npm 配置。"
 
 policy:
   allow_implicit_invocation: true

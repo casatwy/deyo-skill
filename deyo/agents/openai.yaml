@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
-  short_description: "使用已安装的 deyo 命令发起链接或本地音视频文件转写，并在执行过程中向用户同步任务进度"
-  default_prompt: "Use $deyo to install, configure, or run the published deyo transcription CLI for links or local audio/video files, and keep the user updated on upload, media-check, task, and transcription progress."
+  short_description: "用 deyo CLI 转写链接或本地音视频，处理 API key、格式、进度与排查"
+  default_prompt: "Use $deyo to install or run the deyo CLI for link transcription or a single local media upload, configure API key auth, choose text/SRT/VTT/JSON output, use jsonl progress, use --base-url http://deyo.mac-studio only for explicit local/dev requests, and troubleshoot common failures."
 
 policy:
   allow_implicit_invocation: true

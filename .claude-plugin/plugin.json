@@ -1,7 +1,7 @@
 {
   "name": "deyo",
   "version": "0.1.0",
-  "description": "Official Deyo transcription skill for Claude Code.",
+  "description": "Official Deyo Claude plugin for the deyo CLI: link transcription, single local media upload, API key auth, output formats, JSONL progress, and troubleshooting.",
   "author": {
     "name": "Deyo",
     "url": "https://deyo.miaobi.fun"
@@ -13,6 +13,9 @@
     "deyo",
     "transcription",
     "cli",
+    "upload",
+    "api-key",
+    "jsonl",
     "subtitle",
     "claude-code"
   ],
