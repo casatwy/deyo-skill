@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
-  short_description: "使用已安装的 deyo 命令发起链接转写，并在执行过程中向用户同步任务进度"
-  default_prompt: "Use the deyo skill to install, configure, or run the published deyo transcription CLI, and keep the user updated on task progress."
+  short_description: "使用已安装的 deyo 命令发起链接或本地音视频文件转写，并在执行过程中向用户同步任务进度"
+  default_prompt: "Use the deyo skill to install, configure, or run the published deyo transcription CLI for links or local audio/video files, and keep the user updated on upload, media-check, task, and transcription progress."
 
 # Gemini CLI 原生支持基于 SKILL.md 的加载方式。
 # Gemini 依靠 SKILL.md 顶部的 YAML frontmatter（包含 name 和 description）来识别和触发 skill。
