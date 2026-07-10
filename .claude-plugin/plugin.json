@@ -1,6 +1,6 @@
 {
   "name": "deyo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official Deyo Claude plugin for the deyo CLI: link transcription, single local media upload, API key auth, output formats, JSONL progress, and troubleshooting.",
   "author": {
     "name": "Deyo",
