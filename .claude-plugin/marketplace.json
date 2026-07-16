@@ -1,0 +1,16 @@
+{
+  "name": "deyo-official",
+  "owner": {
+    "name": "Deyo"
+  },
+  "metadata": {
+    "description": "Official Deyo plugins"
+  },
+  "plugins": [
+    {
+      "name": "deyo",
+      "source": "./plugins/deyo",
+      "description": "Transcribe links and local media with the Deyo CLI."
+    }
+  ]
+}

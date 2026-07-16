@@ -10,7 +10,7 @@ Podcast and video transcription: [https://deyo.miaobi.fun](https://deyo.miaobi.f
 
 It documents CLI installation, API key authentication, local config precedence, link/file command construction, stable transcript events, live AI cleanup and final cleaned TXT delivery, result format selection, development base URLs, and common troubleshooting rules.
 
-`deyo/SKILL.md` is the shared main skill definition. Platform metadata is split under `agents/`. Claude's current recommended path is plugin / marketplace installation; legacy `~/.claude/skills` installation is only a fallback.
+`deyo/SKILL.md` is the only hand-edited Skill source. Scripts generate the Codex plugin, Claude plugin, and Gemini extension copies. `deyo/manifest.json` is the repository's only Skill version source. The CLI and Skill have independent installation, versions, and updates: a Skill may require CLI `>=0.2.0` without sharing its version.
 
 ## When To Use
 
@@ -90,7 +90,7 @@ deyo --base-url http://deyo.mac-studio --language zh -O ./tmp/out.txt 'https://w
 Install the CLI:
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
 ```
 
 Save an API key:
@@ -236,7 +236,7 @@ The following `text` commands without `--stream-transcript` are only for explici
 Install the published CLI:
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
 ```
 
 Save an API key:
@@ -362,37 +362,23 @@ deyo --language zh -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 
 ## Use With Claude Code
 
-Claude's current primary path is installing the plugin through the official Deyo marketplace:
+Public install and read-only status commands:
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
+deyo --version
 
-claude plugin marketplace add https://deyo.miaobi.fun/ai/install/claude/marketplace.json
-
-claude plugin install deyo@deyo-official
+deyo skill install --platform claude
+deyo skill status --platform claude
 ```
+
+The CLI merges the official `casatwy/deyo-skill` Git marketplace, installs `deyo@deyo-official`, and sets that marketplace to `autoUpdate: true`. It refuses to replace the same marketplace name from another source. Run `/reload-plugins` or start a new session after an update.
 
 If `claude plugin install` fails, preserve the raw error. Do not modify the user's global git / SSH / npm config and do not manually bypass the marketplace flow.
 
 Claude plugin cache checks only apply to plugin installations performed through `claude plugin install`. In that case, check Claude Code's plugin cache directory, such as `~/.claude/plugins/` or the active Claude Code plugin directory.
 
-Legacy fallback: if the current environment cannot use Claude plugin / marketplace installation, copy or symlink `deyo/` into a Claude skills directory.
-
-User-level (available everywhere):
-
-```bash
-mkdir -p ~/.claude/skills
-ln -snf "$(pwd)/deyo" ~/.claude/skills/deyo
-```
-
-Project-level (only inside one repo):
-
-```bash
-mkdir -p .claude/skills
-ln -snf "$(realpath ./deyo)" .claude/skills/deyo
-```
-
-Legacy skills installation does not use plugin cache checks; only verify that the target `SKILL.md` is readable by Claude Code.
+Legacy skills can migrate only when the complete tree matches an official historical hash and the user supplies `--replace-legacy sha256:<observed-hash>`. Local changes, extra files, unknown sources, and symlinks stop without overwriting.
 
 Once installed, Claude Code will suggest the skill automatically in matching scenarios. You can also invoke it explicitly:
 
@@ -400,11 +386,16 @@ Once installed, Claude Code will suggest the skill automatically in matching sce
 /deyo turn this YouTube link into a Chinese SRT
 ```
 
-Claude-side metadata lives in `deyo/agents/claude.yaml`. Claude plugin metadata lives in the repository-root `.claude-plugin/plugin.json`.
+Claude metadata lives in `deyo/agents/claude.yaml`; the marketplace and plugin manifests live at `.claude-plugin/marketplace.json` and `plugins/deyo/.claude-plugin/plugin.json`.
 
 ## Use With Codex / OpenAI Agents
 
-See `deyo/agents/openai.yaml` and load `deyo/SKILL.md` through the Codex / OpenAI Agents skill registration flow.
+```bash
+deyo skill install --platform codex
+deyo skill status --platform codex
+```
+
+The CLI adds the official `casatwy/deyo-skill` Git marketplace and installs `deyo@deyo-official`. Codex manages plugin refreshes; updated skills apply to new threads. The CLI does not overwrite Codex caches or lockfiles.
 
 ## Use With OpenClaw / ClawHub
 
@@ -413,14 +404,14 @@ If you already use OpenClaw, prefer its native `openclaw skills` commands to ins
 First make sure the machine already has the `deyo` command:
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
 ```
 
-Recommended flow: install the skill into the current workspace:
+The default is an owner-qualified global install:
 
 ```bash
-openclaw skills search "deyo"
-openclaw skills install deyo
+deyo skill install --platform openclaw
+deyo skill status --platform openclaw
 ```
 
 After installation, save the API key once:
@@ -429,20 +420,7 @@ After installation, save the API key once:
 deyo auth login --api-key 'deyo_sk_xxx'
 ```
 
-To update all installed skills later:
-
-```bash
-openclaw skills update --all
-```
-
-If you prefer the standalone ClawHub CLI, you can also do:
-
-```bash
-npm install -g clawhub
-
-clawhub search "deyo"
-clawhub install deyo
-```
+The default target is the owner-qualified `@casatwy/deyo --global`. Use `deyo skill install --platform openclaw --scope workspace` only when the current OpenClaw workspace needs an isolated install. Installation and updates handle only the active scope and never use `--all` or `--force`. No Cron job is created. On invocation, the Skill uses OpenClaw's native `verify` / `update` at most once per 24 hours with a 20-second timeout, and updates only after a `pass/clean` security verification. Failure continues on the old version; a successful update requires invoking Deyo again.
 
 Once installed, you can ask OpenClaw directly, for example:
 
@@ -452,21 +430,14 @@ Use deyo to turn this YouTube link into a Chinese SRT
 
 ## Use With Gemini CLI
 
-Gemini CLI natively supports reading `SKILL.md` with frontmatter. Install the `deyo` subdirectory directly from the official Git repository:
-
-User-level (available everywhere):
+Gemini uses the auto-updating official Git extension:
 
 ```bash
-gemini skills install https://github.com/casatwy/deyo-skill.git --path deyo --scope user
+deyo skill install --platform gemini
+deyo skill status --platform gemini
 ```
 
-Project-level (only inside one repo):
-
-```bash
-gemini skills install https://github.com/casatwy/deyo-skill.git --path deyo --scope workspace
-```
-
-Keep Gemini CLI's source confirmation enabled during installation; do not add `--consent` to bypass the security prompt. After installation, run `/skills reload`, then `/skills list`, in an interactive Gemini CLI session. Workspace scope also requires a trusted workspace. Additional notes are recorded in `deyo/agents/gemini.yaml`.
+The equivalent native command is `gemini extensions install https://github.com/casatwy/deyo-skill.git --auto-update`; do not pin `--ref` or add `--consent`. Restart Gemini CLI after an update.
 
 ## Directory Layout
 
@@ -474,14 +445,14 @@ Keep Gemini CLI's source confirmation enabled during installation; do not add `-
 skill_/
 ├── README.md
 ├── README.en.md
-├── .claude-plugin/
-│   └── plugin.json
-└── deyo/
-    ├── SKILL.md
-    └── agents/
-        ├── openai.yaml
-        ├── claude.yaml
-        └── gemini.yaml
+├── deyo/                       # canonical source
+├── plugins/deyo/               # generated Codex + Claude plugin
+├── skills/deyo/                # generated Gemini extension skill
+├── .agents/plugins/marketplace.json
+├── .claude-plugin/marketplace.json
+├── gemini-extension.json
+├── providers/metadata.json
+└── scripts/release.mjs
 ```
 
 ## Related Files
@@ -490,4 +461,20 @@ skill_/
 - `deyo/agents/openai.yaml`: Codex / OpenAI Agents metadata.
 - `deyo/agents/claude.yaml`: Claude Code display, invocation, and legacy skill notes.
 - `deyo/agents/gemini.yaml`: Gemini CLI installation and integration notes.
-- `.claude-plugin/plugin.json`: Claude plugin / marketplace metadata.
+- `deyo/manifest.json`: sole Skill version source and minimum CLI version.
+- `plugins/deyo/`: generated self-contained Codex / Claude plugin.
+- `skills/deyo/` and `gemini-extension.json`: generated Gemini extension.
+- `providers/metadata.json`: unified platform version, Git source, and canonical tree hash.
+- `scripts/release.mjs`: resumable multi-platform maintainer publisher.
+
+## Maintainers: Safely Abort A Frozen Release
+
+Run this only while a release is strictly `frozen`, before any release commit, tag, exact ClawHub version, or remote activation exists:
+
+```bash
+make abort
+```
+
+This command is separate from normal `publish` and `RESUME=1`. It rechecks the official Git branch, upstream, origin, local/remote master, local/remote target tag, complete immutable ClawHub history, and the exact target version online. CI, a non-interactive terminal, a non-`frozen` state, or any conflict stops the abort. The confirmation phrase is exactly `abort deyo v<target version>`.
+
+Aborting does not change the worktree, Git remotes, or ClawHub. The active state is atomically renamed on the same filesystem into private storage under `.git/deyo-release/aborted/`, with the original state, abort time, reason, and current source snapshot recorded. Do not delete state manually or edit a frozen snapshot and attempt `RESUME=1`. After a successful abort, normal `make publish` enumerates ClawHub again and freezes the same patch when the immutable maximum and target reservation remain unchanged.

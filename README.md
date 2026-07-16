@@ -10,7 +10,7 @@
 
 它覆盖 `deyo` CLI 的安装、API key 鉴权、本地配置优先级、链接/文件命令拼装、稳定正文事件、AI 流式整理与最终 cleaned TXT 交付、结果格式选择、开发环境 base URL 和常见排查规则。
 
-`deyo/SKILL.md` 复用同一份主说明文件，`agents/` 下的元信息按平台拆分。Claude 当前推荐通过 plugin / marketplace 安装；legacy `~/.claude/skills` 只作为备用安装方式。
+`deyo/SKILL.md` 是唯一人工编辑的 Skill 源。Codex plugin、Claude plugin 和 Gemini extension 的 Skill 副本由脚本生成；`deyo/manifest.json` 是仓库内唯一 Skill 版本源。CLI 与 Skill 独立安装、独立版本和独立更新：Skill 可以要求 CLI `>=0.2.0`，但二者版本不需要相同。
 
 ## 适用场景
 
@@ -90,7 +90,7 @@ deyo --base-url http://deyo.mac-studio --language zh -O ./tmp/out.txt 'https://w
 安装 CLI：
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
 ```
 
 保存 API key：
@@ -236,7 +236,7 @@ YouTube 字幕直出的 `text` 同样整理后再展示；SRT/VTT 保持原样�
 安装已发布的 CLI：
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
 ```
 
 保存 API key：
@@ -362,37 +362,23 @@ deyo --language zh -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 
 ## 在 Claude Code 中使用
 
-Claude 当前主路径是通过 Deyo 官方 marketplace 安装 plugin：
+公共安装与只读状态命令：
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
+deyo --version
 
-claude plugin marketplace add https://deyo.miaobi.fun/ai/install/claude/marketplace.json
-
-claude plugin install deyo@deyo-official
+deyo skill install --platform claude
+deyo skill status --platform claude
 ```
+
+CLI 会合并官方 Git marketplace `casatwy/deyo-skill`、安装 `deyo@deyo-official`，并为该 marketplace 设置 `autoUpdate: true`。同名 marketplace 如果来自其他源，安装会拒绝覆盖。更新后执行 `/reload-plugins` 或开启新会话生效。
 
 如果 `claude plugin install` 失败，请保留原始错误，不要自行修改全局 git / SSH / npm 配置，也不要手动绕行下载。
 
 Claude plugin cache 检查只适用于通过 `claude plugin install` 安装 plugin 的场景。此时可以检查 Claude Code 的 plugin 缓存目录，例如 `~/.claude/plugins/` 或当前 Claude Code 使用的 plugin 目录。
 
-Legacy 备用方式：如果当前环境不能使用 Claude plugin / marketplace，可以把 `deyo/` 目录复制或软链到 Claude skills 目录。
-
-用户级（全机可用）：
-
-```bash
-mkdir -p ~/.claude/skills
-ln -snf "$(pwd)/deyo" ~/.claude/skills/deyo
-```
-
-项目级（只在当前仓库可用）：
-
-```bash
-mkdir -p .claude/skills
-ln -snf "$(realpath ./deyo)" .claude/skills/deyo
-```
-
-Legacy skills 安装不适用 plugin cache 检查；只需确认目标 `SKILL.md` 可被 Claude Code 读取。
+Legacy skills 只允许在完整匹配官方历史哈希时通过 `--replace-legacy sha256:<observed-hash>` 迁移；本地修改、额外文件、未知来源或 symlink 会停止，不会覆盖。
 
 安装完成后，Claude Code 会在匹配场景中自动建议调用，也可以显式触发：
 
@@ -400,11 +386,16 @@ Legacy skills 安装不适用 plugin cache 检查；只需确认目标 `SKILL.md
 /deyo 帮我把这个 YouTube 链接转成中文 SRT
 ```
 
-Claude 侧的元信息记录在 `deyo/agents/claude.yaml`。Claude plugin 元信息记录在仓库根部的 `.claude-plugin/plugin.json`。
+Claude 侧元信息记录在 `deyo/agents/claude.yaml`；marketplace 与 plugin manifest 分别位于 `.claude-plugin/marketplace.json` 和 `plugins/deyo/.claude-plugin/plugin.json`。
 
 ## 在 Codex / OpenAI Agents 中使用
 
-参考 `deyo/agents/openai.yaml`，按 Codex / OpenAI Agents 的 skill 注册流程加载 `deyo/SKILL.md` 即可。
+```bash
+deyo skill install --platform codex
+deyo skill status --platform codex
+```
+
+CLI 会添加官方 Git marketplace `casatwy/deyo-skill` 并安装 `deyo@deyo-official`。Codex 管理 plugin 更新；更新后的 Skill 从新 thread 开始生效。CLI 不直接覆盖 Codex cache 或 lockfile。
 
 ## 在 OpenClaw / ClawHub 中使用
 
@@ -413,14 +404,14 @@ Claude 侧的元信息记录在 `deyo/agents/claude.yaml`。Claude plugin 元信
 先确保机器上已经有 `deyo` 命令：
 
 ```bash
-npm install -g @casatwy/deyo
+npm install -g @casatwy/deyo@^0.2.0
 ```
 
-推荐方式：在当前 workspace 安装 skill：
+默认使用全局、owner-qualified 安装：
 
 ```bash
-openclaw skills search "deyo"
-openclaw skills install deyo
+deyo skill install --platform openclaw
+deyo skill status --platform openclaw
 ```
 
 安装后，执行一次 API key 登录：
@@ -429,20 +420,7 @@ openclaw skills install deyo
 deyo auth login --api-key 'deyo_sk_xxx'
 ```
 
-后续更新所有已安装 skills：
-
-```bash
-openclaw skills update --all
-```
-
-如果你更偏向单独使用 ClawHub CLI，也可以这样做：
-
-```bash
-npm install -g clawhub
-
-clawhub search "deyo"
-clawhub install deyo
-```
+默认安装目标是 owner-qualified 的 `@casatwy/deyo --global`；只有明确需要当前 OpenClaw workspace 隔离时，才使用 `deyo skill install --platform openclaw --scope workspace`。安装和更新只处理当前生效 scope，不会使用 `--all` 或 `--force`。不创建 Cron；每次调用 Skill 时最多每 24 小时通过 OpenClaw 原生 `verify` / `update` 检查一次，20 秒超时且只有 security verification 为 `pass/clean` 才更新。失败继续使用旧版；更新成功后重新调用以加载新版。
 
 安装完成后，就可以在 OpenClaw 对话里直接提需求，例如：
 
@@ -452,21 +430,14 @@ clawhub install deyo
 
 ## 在 Gemini CLI 中使用
 
-Gemini CLI 原生支持读取带 frontmatter 的 `SKILL.md`。推荐直接从官方 Git 仓库安装 `deyo` 子目录：
-
-用户级（全机可用）：
+Gemini 使用带自动更新的官方 Git extension：
 
 ```bash
-gemini skills install https://github.com/casatwy/deyo-skill.git --path deyo --scope user
+deyo skill install --platform gemini
+deyo skill status --platform gemini
 ```
 
-项目级（只在当前仓库可用）：
-
-```bash
-gemini skills install https://github.com/casatwy/deyo-skill.git --path deyo --scope workspace
-```
-
-安装时保留 Gemini CLI 的来源确认，不主动添加 `--consent` 跳过安全提示。安装后，在 Gemini CLI 交互会话中执行 `/skills reload`，再执行 `/skills list` 确认已加载。workspace scope 还要求当前目录已受信任。额外说明记录在 `deyo/agents/gemini.yaml`。
+等价原生命令是 `gemini extensions install https://github.com/casatwy/deyo-skill.git --auto-update`；不固定 `--ref`，也不添加 `--consent`。更新后重启 Gemini CLI 生效。
 
 ## 目录结构
 
@@ -474,14 +445,14 @@ gemini skills install https://github.com/casatwy/deyo-skill.git --path deyo --sc
 skill_/
 ├── README.md
 ├── README.en.md
-├── .claude-plugin/
-│   └── plugin.json
-└── deyo/
-    ├── SKILL.md
-    └── agents/
-        ├── openai.yaml
-        ├── claude.yaml
-        └── gemini.yaml
+├── deyo/                       # canonical source
+├── plugins/deyo/               # generated Codex + Claude plugin
+├── skills/deyo/                # generated Gemini extension skill
+├── .agents/plugins/marketplace.json
+├── .claude-plugin/marketplace.json
+├── gemini-extension.json
+├── providers/metadata.json
+└── scripts/release.mjs
 ```
 
 ## 相关文件
@@ -490,4 +461,20 @@ skill_/
 - `deyo/agents/openai.yaml`：Codex / OpenAI Agents 元信息。
 - `deyo/agents/claude.yaml`：Claude Code 侧显示名、触发方式与 legacy skill 说明。
 - `deyo/agents/gemini.yaml`：Gemini CLI 安装和集成说明。
-- `.claude-plugin/plugin.json`：Claude plugin / marketplace 元信息。
+- `deyo/manifest.json`：唯一 Skill 版本源和最低 CLI 版本。
+- `plugins/deyo/`：生成的 Codex / Claude 自包含 plugin。
+- `skills/deyo/` 与 `gemini-extension.json`：生成的 Gemini extension。
+- `providers/metadata.json`：四平台统一版本、Git source 与 canonical tree hash。
+- `scripts/release.mjs`：维护者使用的可恢复多平台发布器。
+
+## 维护者：安全中止 frozen 发布
+
+只有发布仍严格处于 `frozen`、且尚未产生 release commit、tag、ClawHub 精确版本或远端激活时，才可运行：
+
+```bash
+make abort
+```
+
+该命令与普通 `publish` / `RESUME=1` 相互独立。它会重新在线核对官方 Git 分支、upstream、origin、local/remote master、local/remote 目标 tag、ClawHub 完整不可变版本历史与精确目标版本；CI、非交互终端、非 `frozen` state 或任何冲突都会硬停止。确认短语固定为 `abort deyo v<目标版本>`。
+
+中止不会修改工作树、Git 远端或 ClawHub。Active state 会通过同文件系统原子 rename 归档到私有的 `.git/deyo-release/aborted/`，同时记录原 state、中止时间、原因和当前 source snapshot。不要手工删除 state，也不要修改 frozen snapshot 后尝试 `RESUME=1`。中止成功后，普通 `make publish` 会重新枚举 ClawHub；如果最高不可变版本和目标占用状态没有变化，会重新冻结同一个 patch 版本。

@@ -1,0 +1,20 @@
+{
+  "name": "deyo-official",
+  "interface": {
+    "displayName": "Deyo Official"
+  },
+  "plugins": [
+    {
+      "name": "deyo",
+      "source": {
+        "source": "local",
+        "path": "./plugins/deyo"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

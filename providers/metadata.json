@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "skillVersion": "1.0.9",
+  "minimumCliVersion": "0.2.0",
+  "canonicalTreeHash": "5508c6ca86c9d14fafee05550d421adbdc6056b9a50b0a33ee1c038b2ce226c2",
+  "source": {
+    "repository": "https://github.com/casatwy/deyo-skill.git",
+    "ref": "v1.0.9"
+  },
+  "providers": {
+    "codex": {
+      "marketplace": "deyo-official",
+      "plugin": "deyo@deyo-official",
+      "skillPath": "plugins/deyo/skills/deyo"
+    },
+    "claude": {
+      "marketplace": "deyo-official",
+      "plugin": "deyo@deyo-official",
+      "skillPath": "plugins/deyo/skills/deyo"
+    },
+    "gemini": {
+      "extension": "deyo",
+      "skillPath": "skills/deyo"
+    },
+    "openclaw": {
+      "registry": "@casatwy/deyo",
+      "license": "MIT-0",
+      "skillPath": "deyo"
+    }
+  }
+}

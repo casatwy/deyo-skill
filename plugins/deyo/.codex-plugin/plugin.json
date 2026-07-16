@@ -1,0 +1,36 @@
+{
+  "name": "deyo",
+  "version": "1.0.9",
+  "description": "Official Deyo plugin for reliable link and local-media transcription through the deyo CLI.",
+  "author": {
+    "name": "Deyo",
+    "url": "https://github.com/casatwy"
+  },
+  "homepage": "https://deyo.miaobi.fun/docs",
+  "repository": "https://github.com/casatwy/deyo-skill",
+  "license": "UNLICENSED",
+  "keywords": [
+    "deyo",
+    "transcription",
+    "cli",
+    "audio",
+    "video"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Deyo",
+    "shortDescription": "Transcribe links and local media with Deyo",
+    "longDescription": "Use the Deyo CLI for authenticated link or local-media transcription, reliable progress, cleaned text, and exact raw or subtitle output.",
+    "developerName": "Deyo",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://deyo.miaobi.fun/docs",
+    "defaultPrompt": [
+      "Transcribe this link with Deyo and save cleaned text.",
+      "Transcribe this local media file with Deyo."
+    ]
+  }
+}

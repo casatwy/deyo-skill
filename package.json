@@ -1,0 +1,20 @@
+{
+  "name": "deyo-skill-release",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "generate": "node scripts/generate-providers.mjs",
+    "generate:check": "node scripts/generate-providers.mjs --check",
+    "validate": "node scripts/validate-artifacts.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "clawhub": "0.23.1",
+    "yaml": "2.8.1"
+  }
+}
+
