@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
-  short_description: "用 deyo CLI 转写链接或本地音视频，处理 API key、格式、进度与排查"
-  default_prompt: "Use the deyo skill to install or run the deyo CLI for link transcription or a single local media upload, configure API key auth, choose text/SRT/VTT/JSON output, use jsonl progress, use --base-url http://deyo.mac-studio only for explicit local/dev requests, and troubleshoot common failures."
+  short_description: "用 deyo CLI 转写链接或本地音视频，流式整理正文并安全交付 TXT"
+  default_prompt: "Use the deyo skill to transcribe a link or one local media file. For non-raw text, require CLI 0.2.0+, stream numbered cleaned paragraphs, handle resets, rebuild from private final raw, and publish with the bundled atomic no-clobber helper. Preserve SRT/VTT/JSON and explicit raw exactly."
 
 # Gemini CLI 原生支持基于 SKILL.md 的加载方式。
 # Gemini 依靠 SKILL.md 顶部的 YAML frontmatter（包含 name 和 description）来识别和触发 skill。
@@ -10,6 +10,8 @@ gemini_cli:
   skill_id: "deyo"
   notes:
     - "Gemini CLI 原生读取 SKILL.md，只要包含 name 和 description frontmatter 即可。"
-    - "安装方式：在 Gemini CLI 中执行：gemini skills install <path/to/deyo> --scope workspace|user"
-    - "安装后，用户需在交互式会话中执行 /skills reload 生效。"
+    - "推荐安装方式：gemini skills install https://github.com/casatwy/deyo-skill.git --path deyo --scope user；只有明确需要项目级隔离时才改用 workspace。"
+    - "保留 Gemini CLI 的来源确认，不主动添加 --consent；安装后在交互式会话中执行 /skills reload，再用 /skills list 确认已加载。"
+    - "workspace scope 依赖可信 workspace；user scope 不受 workspace 信任状态影响。"
     - "运行 deyo 前必须具备 API key；普通情况使用默认生产服务，只有用户明确要求本地/开发环境时才传 --base-url http://deyo.mac-studio。"
+    - "整理纯文本时要求 deyo CLI 0.2.0+，并使用 --stream-transcript 与 --progress-format jsonl；最终文件必须从权限受限的终态 raw 重新完整整理。"

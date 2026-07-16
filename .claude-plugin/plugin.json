@@ -1,7 +1,7 @@
 {
   "name": "deyo",
-  "version": "0.1.1",
-  "description": "Official Deyo Claude plugin for the deyo CLI: link transcription, single local media upload, API key auth, output formats, JSONL progress, and troubleshooting.",
+  "version": "0.2.0",
+  "description": "Official Deyo Claude plugin for link or local-media transcription, live cleaned-text streaming, safe final TXT delivery, exact raw/subtitle formats, and troubleshooting.",
   "author": {
     "name": "Deyo",
     "url": "https://deyo.miaobi.fun"
@@ -16,6 +16,8 @@
     "upload",
     "api-key",
     "jsonl",
+    "streaming",
+    "cleaned-text",
     "subtitle",
     "claude-code"
   ],
