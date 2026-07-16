@@ -32,6 +32,15 @@ import {
 } from './release-core.mjs'
 import { generateProviders } from './generate-providers.mjs'
 import { projectClawHubSkill } from './clawhub-projection.mjs'
+import {
+  CommandExecutionError,
+  currentProgressReporter,
+  progressSkip,
+  progressStage,
+  ReleaseProgressReporter,
+  safeCommandLabel,
+  withProgressReporter,
+} from './release-progress.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clawhub = path.join(root, 'node_modules', '.bin', 'clawhub')
@@ -69,10 +78,13 @@ export function parseReleaseOptions(argv) {
 async function command(commandName, args, options = {}) {
   return await new Promise((resolve, reject) => {
     let settled = false
+    const label = safeCommandLabel(commandName, args, options.label)
+    const reporter = currentProgressReporter()
+    const activity = reporter?.startCommand(label)
     const child = spawn(commandName, args, {
       cwd: options.cwd ?? root,
       env: options.env ?? process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     })
     const stdout = []
     const stderr = []
@@ -81,21 +93,30 @@ async function command(commandName, args, options = {}) {
           if (settled) return
           settled = true
           child.kill('SIGKILL')
-          reject(new Error(`${commandName} ${args.join(' ')} timed out after ${options.timeoutMs} ms`))
+          activity?.finish({ timedOut: true, timeoutMs: options.timeoutMs })
+          reject(new CommandExecutionError(label, { timedOut: true, timeoutMs: options.timeoutMs }))
         }, options.timeoutMs)
       : null
-    child.stdout.on('data', chunk => stdout.push(chunk))
-    child.stderr.on('data', chunk => stderr.push(chunk))
+    child.stdout.on('data', (chunk) => {
+      stdout.push(chunk)
+      if (options.forwardStdout !== false) activity?.forward('stdout', chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr.push(chunk)
+      if (options.forwardStderr !== false) activity?.forward('stderr', chunk)
+    })
     child.on('error', (error) => {
       if (settled) return
       settled = true
       if (timeout) clearTimeout(timeout)
-      reject(error)
+      activity?.finish({ signal: error?.code ?? 'spawn-error' })
+      reject(new CommandExecutionError(label, { signal: error?.code ?? 'spawn-error', cause: error }))
     })
     child.on('close', (code, signal) => {
       if (settled) return
       settled = true
       if (timeout) clearTimeout(timeout)
+      activity?.finish({ code, signal })
       const result = {
         code,
         signal,
@@ -103,11 +124,11 @@ async function command(commandName, args, options = {}) {
         stderr: Buffer.concat(stderr),
       }
       if (code !== 0 && !options.allowFailure) {
-        const detail = result.stderr.toString('utf8').trim() || result.stdout.toString('utf8').trim()
-        reject(new Error(`${commandName} ${args.join(' ')} failed (${code ?? signal}): ${detail}`))
+        reject(new CommandExecutionError(label, { code, signal }))
       }
       else resolve(result)
     })
+    if (options.input !== undefined) child.stdin.end(options.input)
   })
 }
 
@@ -150,6 +171,7 @@ async function writeState(state) {
 async function advanceState(state, phase, extra = {}) {
   const updated = { ...state, ...extra, phase, updatedAt: new Date().toISOString() }
   await writeState(updated)
+  currentProgressReporter()?.setRecovery(phase, 'make publish RESUME=1')
   return updated
 }
 
@@ -247,7 +269,11 @@ async function inspectExact(version) {
   if (result.code === 0) return JSON.parse(result.stdout)
   const detail = `${result.stdout}\n${result.stderr}`
   if (/not found|404|unknown version/i.test(detail)) return null
-  throw new Error(`Could not determine whether ClawHub ${version} exists: ${detail.trim()}`)
+  throw new CommandExecutionError('clawhub inspect', {
+    code: result.code,
+    signal: result.signal,
+    message: `Could not determine whether ClawHub ${version} exists`,
+  })
 }
 
 async function assertTargetTagsAbsent(targetVersion) {
@@ -310,7 +336,11 @@ async function verifyExact(version) {
   }
   catch {
     if (result.code !== 0) {
-      throw new Error(`Could not verify ClawHub ${version}: ${payload || `exit ${result.code}`}`)
+      throw new CommandExecutionError('clawhub skill verify', {
+        code: result.code,
+        signal: result.signal,
+        message: `Could not verify ClawHub ${version}`,
+      })
     }
     throw new Error(`ClawHub verification returned invalid JSON for ${version}`)
   }
@@ -338,60 +368,92 @@ async function stageCanonicalVersion(version) {
 }
 
 async function runRepositoryValidation() {
-  await textCommand(process.execPath, ['scripts/generate-providers.mjs', '--check'])
-  await textCommand(process.execPath, ['scripts/validate-artifacts.mjs'])
-  await textCommand('pnpm', ['test'])
-  await git(['diff', '--check'])
-  const claude = await textCommand('claude', ['plugin', 'validate', '.'], { allowFailure: true })
-  if (claude.code !== 0) throw new Error(`Claude plugin validator failed: ${(claude.stderr || claude.stdout).trim()}`)
+  await progressStage('Check generated providers', async () => {
+    await textCommand(process.execPath, ['scripts/generate-providers.mjs', '--check'])
+  })
+  await progressStage('Validate provider artifacts', async () => {
+    await textCommand(process.execPath, ['scripts/validate-artifacts.mjs'])
+  })
+  await progressStage('Run release tests', async () => {
+    await textCommand('pnpm', ['test'])
+  })
+  await progressStage('Check Git diff whitespace', async () => {
+    await git(['diff', '--check'])
+  })
+  await progressStage('Validate Claude plugin', async () => {
+    const claude = await textCommand('claude', ['plugin', 'validate', '.'], { allowFailure: true })
+    if (claude.code !== 0) {
+      throw new CommandExecutionError('claude plugin validate', {
+        code: claude.code,
+        signal: claude.signal,
+        message: 'Claude plugin validator failed',
+      })
+    }
+  })
 }
 
 async function assertCliPublished(minimumCliVersion, targetVersion) {
-  const result = await textCommand('npm', ['view', `@casatwy/deyo@${minimumCliVersion}`, 'version', '--json'], { allowFailure: true, timeoutMs: NETWORK_TIMEOUT_MS })
-  if (result.code !== 0 || JSON.parse(result.stdout || 'null') !== minimumCliVersion) {
-    throw new Error(`@casatwy/deyo@${minimumCliVersion} must be published before Deyo Skill v${targetVersion}`)
-  }
+  await progressStage('Verify minimum npm CLI version', async () => {
+    const result = await textCommand('npm', ['view', `@casatwy/deyo@${minimumCliVersion}`, 'version', '--json'], { allowFailure: true, timeoutMs: NETWORK_TIMEOUT_MS })
+    if (result.code !== 0) {
+      throw new CommandExecutionError('npm view', {
+        code: result.code,
+        signal: result.signal,
+        message: `@casatwy/deyo@${minimumCliVersion} must be published before Deyo Skill v${targetVersion}`,
+      })
+    }
+    if (JSON.parse(result.stdout || 'null') !== minimumCliVersion) {
+      throw new Error(`@casatwy/deyo@${minimumCliVersion} must be published before Deyo Skill v${targetVersion}`)
+    }
+  })
 }
 
 async function clawHubPublishDryRun(stage, targetVersion, releaseNotes, sourceCommit) {
-  await textCommand(clawhub, [
-    'publish', stage,
-    '--slug', 'deyo',
-    '--name', 'Deyo',
-    '--owner', 'casatwy',
-    '--version', targetVersion,
-    '--tags', 'latest',
-    '--changelog', releaseNotes,
-    '--source-repo', 'https://github.com/casatwy/deyo-skill',
-    '--source-commit', sourceCommit,
-    '--source-ref', `v${targetVersion}`,
-    '--source-path', 'deyo',
-    '--dry-run',
-    '--json',
-  ], { timeoutMs: 60_000 })
+  await progressStage('Run ClawHub publish dry-run', async () => {
+    await textCommand(clawhub, [
+      'publish', stage,
+      '--slug', 'deyo',
+      '--name', 'Deyo',
+      '--owner', 'casatwy',
+      '--version', targetVersion,
+      '--tags', 'latest',
+      '--changelog', releaseNotes,
+      '--source-repo', 'https://github.com/casatwy/deyo-skill',
+      '--source-commit', sourceCommit,
+      '--source-ref', `v${targetVersion}`,
+      '--source-path', 'deyo',
+      '--dry-run',
+      '--json',
+    ], { timeoutMs: 60_000, label: 'clawhub publish --dry-run' })
+  })
 }
 
 async function fullPreflight({ resume, state }) {
   let recoveredState = resume ? validateReleaseState(state) : null
-  await assertGitPreflight()
-  await assertLocalTooling()
-  const remoteMaster = await remoteMasterCommit()
-  const localHead = (await git(['rev-parse', 'HEAD'])).stdout.trim()
+  await progressStage('Check Git release preflight', assertGitPreflight)
+  await progressStage('Check local release tooling and ClawHub login', assertLocalTooling)
+  const { remoteMaster, localHead } = await progressStage('Read local and remote Git baseline', async () => ({
+    remoteMaster: await remoteMasterCommit(),
+    localHead: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
+  }))
   if (resume) {
-    let localHeadParent = null
-    let localHeadSubject = null
-    if (!phaseAtLeast(recoveredState, 'committed') && localHead !== recoveredState.baseCommit) {
-      localHeadParent = (await git(['rev-parse', `${localHead}^`])).stdout.trim()
-      localHeadSubject = (await git(['show', '-s', '--format=%s', localHead])).stdout.trim()
-    }
-    recoveredState = reconcileResumeGitState(recoveredState, {
-      localHead,
-      localHeadParent,
-      localHeadSubject,
-      remoteMaster,
+    recoveredState = await progressStage('Reconcile recovery Git state', async () => {
+      let localHeadParent = null
+      let localHeadSubject = null
+      if (!phaseAtLeast(recoveredState, 'committed') && localHead !== recoveredState.baseCommit) {
+        localHeadParent = (await git(['rev-parse', `${localHead}^`])).stdout.trim()
+        localHeadSubject = (await git(['show', '-s', '--format=%s', localHead])).stdout.trim()
+      }
+      return reconcileResumeGitState(recoveredState, {
+        localHead,
+        localHeadParent,
+        localHeadSubject,
+        remoteMaster,
+      })
     })
   }
   if (!resume || phaseAtLeast(recoveredState, 'prepared')) await runRepositoryValidation()
+  else progressSkip('Repository validation preflight', 'runs while preparing the frozen workspace')
   const canonical = JSON.parse(await readFile(path.join(root, 'deyo/manifest.json'), 'utf8'))
 
   if (resume) {
@@ -399,19 +461,26 @@ async function fullPreflight({ resume, state }) {
     return { canonical, state: recoveredState }
   }
 
-  const inspect = await inspectVersions()
-  const allocation = allocateTargetVersion(inspect)
-  assertTargetAbsent(allocation.versions, allocation.targetVersion)
-  const exact = await inspectExact(allocation.targetVersion)
-  if (exact) throw new Error(`ClawHub target ${allocation.targetVersion} is already reserved`)
+  const { inspect, allocation } = await progressStage('Allocate next immutable ClawHub version', async () => {
+    const inspect = await inspectVersions()
+    const allocation = allocateTargetVersion(inspect)
+    assertTargetAbsent(allocation.versions, allocation.targetVersion)
+    const exact = await inspectExact(allocation.targetVersion)
+    if (exact) throw new Error(`ClawHub target ${allocation.targetVersion} is already reserved`)
+    return { inspect, allocation }
+  })
   let remoteBaseCommit = null
   if (localHead !== remoteMaster) {
     await authorizeAbandonedFixForwardBase({ localHead, remoteMaster, allocation, inspect })
     remoteBaseCommit = remoteMaster
   }
   await assertCliPublished(canonical.minimumCliVersion, allocation.targetVersion)
-  const releaseNotes = validateReleaseNotes(await readFile(path.join(root, 'release/next.md'))).content
-  const stage = await stageCanonicalVersion(allocation.targetVersion)
+  const releaseNotes = await progressStage('Validate release notes', async () => (
+    validateReleaseNotes(await readFile(path.join(root, 'release/next.md'))).content
+  ))
+  const stage = await progressStage('Build ClawHub preflight projection', async () => (
+    await stageCanonicalVersion(allocation.targetVersion)
+  ))
   try {
     await clawHubPublishDryRun(stage, allocation.targetVersion, releaseNotes, localHead)
   }
@@ -501,17 +570,25 @@ async function archiveFrozenAbort(originalState, preflight) {
 }
 
 async function abortFrozenRelease(state, runtime = {}) {
-  const initialPreflight = await frozenAbortPreflight(state)
+  const initialPreflight = await progressStage('Check frozen release abort preflight', async () => (
+    await frozenAbortPreflight(state)
+  ))
   process.stdout.write(
     `Deyo frozen release abort plan: ${state.baseVersion} -> ${state.targetVersion}; ` +
     'no worktree or remote refs will be changed.\n',
   )
-  await confirmAbort(state.targetVersion, runtime)
-  const finalPreflight = await frozenAbortPreflight(state)
+  await progressStage('Confirm frozen release abort', async () => {
+    await confirmAbort(state.targetVersion, runtime)
+  })
+  const finalPreflight = await progressStage('Recheck frozen release abort preflight', async () => (
+    await frozenAbortPreflight(state)
+  ))
   if (finalPreflight.currentSourceSnapshot !== initialPreflight.currentSourceSnapshot) {
     process.stdout.write('Release source changed while confirming; the final snapshot will be recorded in the abort archive.\n')
   }
-  return await archiveFrozenAbort(state, finalPreflight)
+  return await progressStage('Archive frozen release state', async () => (
+    await archiveFrozenAbort(state, finalPreflight)
+  ))
 }
 
 function terminalSecurityEvidence(verification, targetVersion) {
@@ -710,17 +787,25 @@ async function archiveTerminalFixForward(originalState, preflight) {
 }
 
 async function fixForwardTerminalRelease(state, runtime = {}) {
-  const initial = await terminalFixForwardPreflight(state)
+  const initial = await progressStage('Check terminal fix-forward preflight', async () => (
+    await terminalFixForwardPreflight(state)
+  ))
   process.stdout.write(
     `Deyo terminal security fix-forward plan: ${state.targetVersion} -> ${initial.nextTarget}; ` +
     'the worktree, tags, ClawHub, latest, and origin/master will not be changed.\n',
   )
-  await confirmFixForward(state.targetVersion, initial.nextTarget, runtime)
-  const final = await terminalFixForwardPreflight(state)
+  await progressStage('Confirm terminal fix-forward', async () => {
+    await confirmFixForward(state.targetVersion, initial.nextTarget, runtime)
+  })
+  const final = await progressStage('Recheck terminal fix-forward preflight', async () => (
+    await terminalFixForwardPreflight(state)
+  ))
   if (final.currentSourceSnapshot !== initial.currentSourceSnapshot) {
     throw new Error('Release source changed while fix-forward was being confirmed')
   }
-  return await archiveTerminalFixForward(state, final)
+  return await progressStage('Archive terminal fix-forward state', async () => (
+    await archiveTerminalFixForward(state, final)
+  ))
 }
 
 async function abandonedFixForwardAudits() {
@@ -816,7 +901,7 @@ async function prepareWorkspace(state) {
     if (error?.code !== 'ENOENT') throw error
     await writeFile(notePath, state.releaseNotes)
   }
-  await generateProviders()
+  await progressStage('Generate provider artifacts', generateProviders)
   await runRepositoryValidation()
   const canonicalTreeHash = await hashTree(path.join(root, 'deyo'))
   return await advanceState(state, 'prepared', { canonicalTreeHash })
@@ -846,14 +931,13 @@ async function createAnnotatedTag(state) {
 
 async function archiveTaggedSkill(tag) {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'deyo-tag-archive-'))
-  const archive = await command('git', ['archive', '--format=tar', tag, 'deyo'])
-  await new Promise((resolve, reject) => {
-    const tar = spawn('tar', ['-x', '--strip-components=1', '-C', temporary], { stdio: ['pipe', 'pipe', 'pipe'] })
-    const errors = []
-    tar.stderr.on('data', chunk => errors.push(chunk))
-    tar.on('error', reject)
-    tar.on('close', (code) => code === 0 ? resolve() : reject(new Error(Buffer.concat(errors).toString('utf8'))))
-    tar.stdin.end(archive.stdout)
+  const archive = await command('git', ['archive', '--format=tar', tag, 'deyo'], {
+    forwardStdout: false,
+    label: 'git archive tagged canonical skill',
+  })
+  await command('tar', ['-x', '--strip-components=1', '-C', temporary], {
+    input: archive.stdout,
+    label: 'tar extract tagged canonical skill',
   })
   return temporary
 }
@@ -887,7 +971,13 @@ async function publishClawHubIfNeeded(state, stage, localFingerprint) {
   ], { allowFailure: true, timeoutMs: 60_000 })
   if (result.code !== 0) {
     const afterFailure = await inspectExact(state.targetVersion)
-    if (!afterFailure) throw new Error(`ClawHub publish failed and the target is absent: ${(result.stderr || result.stdout).trim()}`)
+    if (!afterFailure) {
+      throw new CommandExecutionError('clawhub publish', {
+        code: result.code,
+        signal: result.signal,
+        message: `ClawHub publish failed and target ${state.targetVersion} is absent`,
+      })
+    }
     if (!compareFingerprints(localFingerprint, remoteFileFingerprint(afterFailure))) {
       throw new ClawHubConflictError(`ClawHub publish outcome is ambiguous and ${state.targetVersion} has a different fingerprint`)
     }
@@ -914,35 +1004,53 @@ async function isolatedInstallAndVerify(state, localFingerprint) {
 
 async function waitForClawHub(state, stage, runtime = {}) {
   const localFingerprint = await clawHubFileFingerprint(stage)
-  await publishClawHubIfNeeded(state, stage, localFingerprint)
-  const reviewTimeoutMs = runtime.reviewTimeoutMs ?? 10 * 60 * 1000
-  const reviewPollMs = runtime.reviewPollMs ?? 15_000
-  const sleep = runtime.sleep ?? (delay => new Promise(resolve => setTimeout(resolve, delay)))
-  const deadline = Date.now() + reviewTimeoutMs
-  let lastReason = 'ClawHub review is pending'
-  while (Date.now() <= deadline) {
-    try {
-      const [inspect, verification] = await Promise.all([
-        inspectExact(state.targetVersion),
-        verifyExact(state.targetVersion),
-      ])
-      assertClawHubReady(inspect, verification, state.targetVersion, localFingerprint)
-      await isolatedInstallAndVerify(state, localFingerprint)
-      return await advanceState(state, 'clawhub_ready', {
-        clawHubFileFingerprint: localFingerprint,
-        clawHubProjectionKind: runtime.projection?.kind ?? 'unknown',
-        clawHubProjectionTreeHash: runtime.projection?.projectionTreeHash ?? await hashTree(stage),
-      })
+  await progressStage('Publish ClawHub exact version', async () => {
+    await publishClawHubIfNeeded(state, stage, localFingerprint)
+  })
+  return await progressStage('Wait for ClawHub review', async () => {
+    const reviewTimeoutMs = runtime.reviewTimeoutMs ?? 10 * 60 * 1000
+    const reviewPollMs = runtime.reviewPollMs ?? 15_000
+    const sleep = runtime.sleep ?? (delay => new Promise(resolve => setTimeout(resolve, delay)))
+    const startedAt = Date.now()
+    const deadline = startedAt + reviewTimeoutMs
+    let lastReason = 'ClawHub review is pending'
+    while (Date.now() <= deadline) {
+      try {
+        const [inspect, verification] = await Promise.all([
+          inspectExact(state.targetVersion),
+          verifyExact(state.targetVersion),
+        ])
+        assertClawHubReady(inspect, verification, state.targetVersion, localFingerprint)
+        currentProgressReporter()?.poll('ClawHub is pass/clean', {
+          elapsedMs: Date.now() - startedAt,
+          remainingMs: Math.max(0, deadline - Date.now()),
+          nextMs: 0,
+        })
+        await progressStage('Verify isolated ClawHub install', async () => {
+          await isolatedInstallAndVerify(state, localFingerprint)
+        })
+        return await advanceState(state, 'clawhub_ready', {
+          clawHubFileFingerprint: localFingerprint,
+          clawHubProjectionKind: runtime.projection?.kind ?? 'unknown',
+          clawHubProjectionTreeHash: runtime.projection?.projectionTreeHash ?? await hashTree(stage),
+        })
+      }
+      catch (error) {
+        if (error instanceof ClawHubConflictError) throw error
+        lastReason = error instanceof Error ? error.message : String(error)
+        const remaining = Math.max(0, deadline - Date.now())
+        const next = Math.min(reviewPollMs, remaining)
+        currentProgressReporter()?.poll(lastReason, {
+          elapsedMs: Date.now() - startedAt,
+          remainingMs: remaining,
+          nextMs: next,
+        })
+        if (remaining <= 0) break
+        await sleep(next)
+      }
     }
-    catch (error) {
-      if (error instanceof ClawHubConflictError) throw error
-      lastReason = error instanceof Error ? error.message : String(error)
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) break
-      await sleep(Math.min(reviewPollMs, remaining))
-    }
-  }
-  throw new Error(`${lastReason}. Resume the same version with: make publish RESUME=1`)
+    throw new Error(`${lastReason}. Resume the same version with: make publish RESUME=1`)
+  })
 }
 
 async function pushMaster(state) {
@@ -973,75 +1081,104 @@ async function verifyRemoteProviders(state) {
 }
 
 async function completeRelease(state) {
-  await verifyRemoteProviders(state)
-  const releaseNotesPath = `release/notes/v${state.targetVersion}.md`
-  const archivedReleaseNotes = await readFile(path.join(root, releaseNotesPath), 'utf8')
-  if (archivedReleaseNotes !== state.releaseNotes) {
-    throw new Error(`Archived release notes conflict at ${releaseNotesPath}`)
-  }
-  if (sha256(archivedReleaseNotes) !== state.releaseNotesHash) {
-    throw new Error(`Archived release notes hash mismatch at ${releaseNotesPath}`)
-  }
-  const receipt = {
-    schema: 1,
-    skillVersion: state.targetVersion,
-    minimumCliVersion: JSON.parse(await readFile(path.join(root, 'deyo/manifest.json'), 'utf8')).minimumCliVersion,
-    releaseCommit: state.releaseCommit,
-    tag: state.tag,
-    canonicalTreeHash: state.canonicalTreeHash,
-    clawHubLicense: CLAWHUB_LICENSE,
-    clawHubProjectionKind: state.clawHubProjectionKind,
-    clawHubProjectionTreeHash: state.clawHubProjectionTreeHash,
-    releaseNotes: state.releaseNotes,
-    releaseNotesPath,
-    releaseNotesHash: state.releaseNotesHash,
-    clawHubFileFingerprint: state.clawHubFileFingerprint,
-    completedAt: new Date().toISOString(),
-  }
-  await atomicPrivateJson(path.join(receiptsDirectory, `v${state.targetVersion}.json`), receipt)
-  await rm(statePath, { force: true })
-  return receipt
+  await progressStage('Verify remote provider activation', async () => {
+    await verifyRemoteProviders(state)
+  })
+  return await progressStage('Write release receipt', async () => {
+    const releaseNotesPath = `release/notes/v${state.targetVersion}.md`
+    const archivedReleaseNotes = await readFile(path.join(root, releaseNotesPath), 'utf8')
+    if (archivedReleaseNotes !== state.releaseNotes) {
+      throw new Error(`Archived release notes conflict at ${releaseNotesPath}`)
+    }
+    if (sha256(archivedReleaseNotes) !== state.releaseNotesHash) {
+      throw new Error(`Archived release notes hash mismatch at ${releaseNotesPath}`)
+    }
+    const receipt = {
+      schema: 1,
+      skillVersion: state.targetVersion,
+      minimumCliVersion: JSON.parse(await readFile(path.join(root, 'deyo/manifest.json'), 'utf8')).minimumCliVersion,
+      releaseCommit: state.releaseCommit,
+      tag: state.tag,
+      canonicalTreeHash: state.canonicalTreeHash,
+      clawHubLicense: CLAWHUB_LICENSE,
+      clawHubProjectionKind: state.clawHubProjectionKind,
+      clawHubProjectionTreeHash: state.clawHubProjectionTreeHash,
+      releaseNotes: state.releaseNotes,
+      releaseNotesPath,
+      releaseNotesHash: state.releaseNotesHash,
+      clawHubFileFingerprint: state.clawHubFileFingerprint,
+      completedAt: new Date().toISOString(),
+    }
+    await atomicPrivateJson(path.join(receiptsDirectory, `v${state.targetVersion}.json`), receipt)
+    await rm(statePath, { force: true })
+    currentProgressReporter()?.setRecovery('complete', 'none')
+    return receipt
+  })
 }
 
 async function executeRelease(initialState, runtime = {}) {
   let state = initialState
-  const currentSourceSnapshot = await sourceSnapshot(state.baseVersion, state.targetVersion)
-  if (currentSourceSnapshot !== state.sourceSnapshot) {
-    throw new Error('Release source changed after the version was frozen')
+  currentProgressReporter()?.setRecovery(state.phase, 'make publish RESUME=1')
+  await progressStage('Validate frozen release source', async () => {
+    const currentSourceSnapshot = await sourceSnapshot(state.baseVersion, state.targetVersion)
+    if (currentSourceSnapshot !== state.sourceSnapshot) {
+      throw new Error('Release source changed after the version was frozen')
+    }
+  })
+  if (!phaseAtLeast(state, 'prepared')) {
+    state = await progressStage('Prepare release workspace', async () => await prepareWorkspace(state))
   }
-  if (!phaseAtLeast(state, 'prepared')) state = await prepareWorkspace(state)
-  if (!phaseAtLeast(state, 'committed')) state = await createReleaseCommit(state)
-  if (!phaseAtLeast(state, 'tagged')) state = await createAnnotatedTag(state)
+  else progressSkip('Prepare release workspace', `recovery phase ${state.phase}`)
+  if (!phaseAtLeast(state, 'committed')) {
+    state = await progressStage('Create release commit', async () => await createReleaseCommit(state))
+  }
+  else progressSkip('Create release commit', `recovery phase ${state.phase}`)
+  if (!phaseAtLeast(state, 'tagged')) {
+    state = await progressStage('Create annotated release tag', async () => await createAnnotatedTag(state))
+  }
+  else progressSkip('Create annotated release tag', `recovery phase ${state.phase}`)
 
-  const canonicalStage = await archiveTaggedSkill(state.tag)
+  const canonicalStage = await progressStage('Extract immutable tag archive', async () => (
+    await archiveTaggedSkill(state.tag)
+  ))
   const stage = await mkdtemp(path.join(os.tmpdir(), 'deyo-clawhub-release-'))
   try {
-    const archiveHash = await hashTree(canonicalStage)
-    if (archiveHash !== state.canonicalTreeHash) throw new Error('Tagged canonical tree differs from the release state')
-    const projection = await projectClawHubSkill(canonicalStage, stage)
-    if (projection.canonicalTreeHash !== state.canonicalTreeHash) {
-      throw new Error('ClawHub projection does not record the frozen canonical tree hash')
-    }
-    if (projection.skillVersion !== state.targetVersion) {
-      throw new Error('ClawHub projection version differs from the frozen release target')
-    }
-    if (phaseAtLeast(state, 'clawhub_ready')) {
-      const projectionFingerprint = await clawHubFileFingerprint(stage)
-      if (projection.kind !== state.clawHubProjectionKind) {
-        throw new Error('Rebuilt ClawHub projection kind differs from the recovery state')
+    const projection = await progressStage('Build and validate ClawHub projection', async () => {
+      const archiveHash = await hashTree(canonicalStage)
+      if (archiveHash !== state.canonicalTreeHash) throw new Error('Tagged canonical tree differs from the release state')
+      const projection = await projectClawHubSkill(canonicalStage, stage)
+      if (projection.canonicalTreeHash !== state.canonicalTreeHash) {
+        throw new Error('ClawHub projection does not record the frozen canonical tree hash')
       }
-      if (projection.projectionTreeHash !== state.clawHubProjectionTreeHash) {
-        throw new Error('Rebuilt ClawHub projection tree hash differs from the recovery state')
+      if (projection.skillVersion !== state.targetVersion) {
+        throw new Error('ClawHub projection version differs from the frozen release target')
       }
-      if (!compareFingerprints(projectionFingerprint, state.clawHubFileFingerprint)) {
-        throw new Error('Rebuilt ClawHub projection fingerprint differs from the recovery state')
+      if (phaseAtLeast(state, 'clawhub_ready')) {
+        const projectionFingerprint = await clawHubFileFingerprint(stage)
+        if (projection.kind !== state.clawHubProjectionKind) {
+          throw new Error('Rebuilt ClawHub projection kind differs from the recovery state')
+        }
+        if (projection.projectionTreeHash !== state.clawHubProjectionTreeHash) {
+          throw new Error('Rebuilt ClawHub projection tree hash differs from the recovery state')
+        }
+        if (!compareFingerprints(projectionFingerprint, state.clawHubFileFingerprint)) {
+          throw new Error('Rebuilt ClawHub projection fingerprint differs from the recovery state')
+        }
       }
+      return projection
+    })
+    if (!phaseAtLeast(state, 'tag_pushed')) {
+      state = await progressStage('Push immutable release tag', async () => await pushTag(state))
     }
-    if (!phaseAtLeast(state, 'tag_pushed')) state = await pushTag(state)
+    else progressSkip('Push immutable release tag', `recovery phase ${state.phase}`)
     if (!phaseAtLeast(state, 'clawhub_ready')) {
       state = await waitForClawHub(state, stage, { ...runtime, projection })
     }
-    if (!phaseAtLeast(state, 'master_pushed')) state = await pushMaster(state)
+    else progressSkip('Publish and verify ClawHub', `recovery phase ${state.phase}`)
+    if (!phaseAtLeast(state, 'master_pushed')) {
+      state = await progressStage('Push verified release to master', async () => await pushMaster(state))
+    }
+    else progressSkip('Push verified release to master', `recovery phase ${state.phase}`)
     return await completeRelease(state)
   }
   finally {
@@ -1050,9 +1187,18 @@ async function executeRelease(initialState, runtime = {}) {
   }
 }
 
-export async function main(argv = process.argv.slice(2), runtime = {}) {
-  const options = parseReleaseOptions(argv)
+async function runRelease(options, runtime, reporter) {
   const existingState = await readJsonIfPresent(statePath)
+  const defaultNext = options.fixForward
+    ? 'make fix-forward'
+    : options.abort
+      ? 'make abort'
+      : options.resume
+        ? 'make publish RESUME=1'
+        : 'make publish DRY_RUN=1'
+  reporter.setRecovery(existingState?.phase ?? 'none', existingState && !options.abort && !options.fixForward
+    ? 'make publish RESUME=1'
+    : defaultNext)
   if (options.fixForward) {
     if (!existingState) throw new Error('No unfinished Deyo Skill release exists to fix-forward')
     assertFormalEnvironment(runtime)
@@ -1079,25 +1225,62 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     return null
   }
 
-  await confirm(targetVersion, options.resume, runtime)
+  await progressStage('Confirm release execution', async () => {
+    await confirm(targetVersion, options.resume, runtime)
+  })
   if (options.resume) return await executeRelease(preflight.state, runtime)
 
-  const notes = validateReleaseNotes(preflight.releaseNotes)
-  const state = {
-    schema: 1,
-    phase: 'frozen',
-    baseVersion,
-    targetVersion,
-    baseCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
-    ...(preflight.remoteBaseCommit ? { remoteBaseCommit: preflight.remoteBaseCommit } : {}),
-    sourceSnapshot: await sourceSnapshot(baseVersion, targetVersion),
-    releaseNotes: preflight.releaseNotes,
-    releaseNotesHash: notes.sha256,
-    frozenAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
-  await writeState(state)
+  const state = await progressStage('Freeze release recovery state', async () => {
+    const notes = validateReleaseNotes(preflight.releaseNotes)
+    const state = {
+      schema: 1,
+      phase: 'frozen',
+      baseVersion,
+      targetVersion,
+      baseCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
+      ...(preflight.remoteBaseCommit ? { remoteBaseCommit: preflight.remoteBaseCommit } : {}),
+      sourceSnapshot: await sourceSnapshot(baseVersion, targetVersion),
+      releaseNotes: preflight.releaseNotes,
+      releaseNotesHash: notes.sha256,
+      frozenAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    await writeState(state)
+    reporter.setRecovery('frozen', 'make publish RESUME=1')
+    return state
+  })
   return await executeRelease(state, runtime)
+}
+
+export async function main(argv = process.argv.slice(2), runtime = {}) {
+  const options = parseReleaseOptions(argv)
+  const mode = options.fixForward
+    ? 'fix-forward'
+    : options.abort
+      ? 'abort'
+      : options.resume
+        ? 'resume'
+        : options.dryRun
+          ? 'dry-run'
+          : 'publish'
+  const reporter = runtime.progressReporter ?? new ReleaseProgressReporter({
+    stdout: runtime.progressStdout ?? process.stdout,
+    stderr: runtime.progressStderr ?? process.stderr,
+    isTTY: runtime.progressIsTTY ?? Boolean(process.stderr.isTTY),
+  })
+  return await withProgressReporter(reporter, async () => {
+    reporter.mode(mode)
+    try {
+      return await runRelease(options, runtime, reporter)
+    }
+    catch (error) {
+      reporter.failure(error)
+      throw error
+    }
+    finally {
+      reporter.stop()
+    }
+  })
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -1113,7 +1296,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     else if (receipt) process.stdout.write(`Published Deyo Skill v${receipt.skillVersion}.\n`)
   }).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    if (!error?.progressReported) process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
   })
 }

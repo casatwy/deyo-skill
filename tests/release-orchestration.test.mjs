@@ -133,6 +133,8 @@ if (args[0] === '--cli-version') {
   process.exit(0)
 }
 if (args[0] === 'whoami') {
+  const delay = Number(process.env.MOCK_CLAWHUB_DELAY_MS || 0)
+  if (delay > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay)
   process.stdout.write((process.env.MOCK_CLAWHUB_ACCOUNT || 'casatwy') + '\\n')
   process.exit(0)
 }
@@ -261,6 +263,10 @@ const path = require('node:path')
 const command = path.basename(process.argv[1])
 const args = process.argv.slice(2)
 if (command === 'npm' && args[0] === 'view') {
+  if (process.env.MOCK_NPM_FAIL === '1') {
+    process.stderr.write('simulated npm lookup failure\\n')
+    process.exit(42)
+  }
   process.stdout.write(JSON.stringify('0.2.2'))
   process.exit(0)
 }
@@ -501,6 +507,10 @@ test('release dry-run computes 1.0.9 and performs zero repository writes', { tim
     const manifestBefore = await readFile(path.join(fixture.repo, 'deyo', 'manifest.json'), 'utf8')
     const result = await fixture.cli(['--dry-run'])
     assert.equal(result.code, 0, result.stderr)
+    assert.match(result.stderr, /\[release\] MODE dry-run/)
+    assert.match(result.stderr, /\[release\] START Check Git release preflight/)
+    assert.match(result.stderr, /\[release\] OK Run ClawHub publish dry-run/)
+    assert.doesNotMatch(result.stderr, /\u001B\[/)
     assert.match(result.stdout, /1\.0\.8 -> 1\.0\.9/)
     assert.match(result.stdout, /No files, state, commits, tags, pushes, or publications/)
     assert.equal((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim(), headBefore)
@@ -515,6 +525,54 @@ test('release dry-run computes 1.0.9 and performs zero repository writes', { tim
   }
 })
 
+test('release progress is observable before a delayed subprocess exits', { timeout: 30_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [path.join(fixture.repo, 'scripts', 'release.mjs'), '--dry-run'], {
+        cwd: fixture.repo,
+        env: { ...fixture.env, MOCK_CLAWHUB_DELAY_MS: '2000' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stderr = ''
+      let settled = false
+      const timeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        child.kill('SIGKILL')
+        reject(new Error(`Did not observe live release progress. stderr: ${stderr}`))
+      }, 5000)
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString('utf8')
+        if (!settled && stderr.includes('[release] RUN clawhub whoami')) {
+          settled = true
+          clearTimeout(timeout)
+          assert.equal(child.exitCode, null)
+          assert.match(stderr, /\[release\] MODE dry-run/)
+          assert.match(stderr, /\[release\] START Check local release tooling and ClawHub login/)
+          child.kill('SIGTERM')
+          resolve()
+        }
+      })
+      child.on('error', (error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        reject(error)
+      })
+      child.on('close', (code) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        reject(new Error(`Release exited ${code} before live progress was observed. stderr: ${stderr}`))
+      })
+    })
+  }
+  finally {
+    await fixture.cleanup()
+  }
+})
+
 test('guarded abort archives a source-mismatched partial freeze and normal publish reuses 1.0.9', { timeout: 45_000 }, async () => {
   const fixture = await createFixture()
   try {
@@ -522,6 +580,8 @@ test('guarded abort archives a source-mismatched partial freeze and normal publi
     const statusBefore = (await fixture.git(['status', '--porcelain'])).stdout
     const aborted = await fixture.formal(['--abort'], { MOCK_CONFIRM: 'abort deyo v1.0.9' })
     assert.equal(aborted.code, 0, aborted.stderr)
+    assert.match(aborted.stderr, /\[release\] MODE abort/)
+    assert.match(aborted.stderr, /\[release\] OK Archive frozen release state/)
     assert.match(aborted.stdout, /no worktree or remote refs will be changed/)
     const receipt = JSON.parse(aborted.stdout.trim().split('\n').at(-1))
     assert.equal(receipt.kind, 'deyo.frozen-release-abort')
@@ -668,6 +728,8 @@ test('terminal security fix-forward archives 1.0.9 and activates only pass-clean
       MOCK_CLAWHUB_VERIFY: 'terminal',
     })
     assert.equal(fixedForward.code, 0, fixedForward.stderr)
+    assert.match(fixedForward.stderr, /\[release\] MODE fix-forward/)
+    assert.match(fixedForward.stderr, /\[release\] OK Archive terminal fix-forward state/)
     assert.match(fixedForward.stdout, /worktree, tags, ClawHub, latest, and origin\/master will not be changed/)
     const auditResult = JSON.parse(fixedForward.stdout.trim().split('\n').at(-1))
     assert.equal(auditResult.kind, 'deyo.terminal-security-fix-forward')
@@ -856,8 +918,8 @@ test('terminal security fix-forward rejects unsafe state, evidence, environment,
   }
 })
 
-test('formal release rejects non-TTY, CI, confirmation mismatch, and ClawHub auth before state', { timeout: 40_000 }, async (t) => {
-  for (const scenario of ['non-tty', 'ci', 'confirmation', 'auth']) {
+test('formal release rejects environment, confirmation, auth, and npm prerequisite failures before state', { timeout: 40_000 }, async (t) => {
+  for (const scenario of ['non-tty', 'ci', 'confirmation', 'auth', 'npm']) {
     await t.test(scenario, async () => {
       const fixture = await createFixture()
       try {
@@ -865,12 +927,19 @@ test('formal release rejects non-TTY, CI, confirmation mismatch, and ClawHub aut
         if (scenario === 'non-tty') result = await fixture.cli([])
         else if (scenario === 'ci') result = await fixture.cli([], { CI: 'true' })
         else if (scenario === 'confirmation') result = await fixture.formal([], { MOCK_CONFIRM: 'wrong' })
-        else result = await fixture.cli(['--dry-run'], { MOCK_CLAWHUB_ACCOUNT: 'someone-else' })
+        else if (scenario === 'auth') result = await fixture.cli(['--dry-run'], { MOCK_CLAWHUB_ACCOUNT: 'someone-else' })
+        else result = await fixture.cli(['--dry-run'], { MOCK_NPM_FAIL: '1' })
         assert.equal(result.code, 1)
         if (scenario === 'non-tty') assert.match(result.stderr, /interactive TTY/)
         if (scenario === 'ci') assert.match(result.stderr, /forbidden in CI/)
         if (scenario === 'confirmation') assert.match(result.stderr, /confirmation mismatch/)
         if (scenario === 'auth') assert.match(result.stderr, /login must be casatwy/)
+        if (scenario === 'npm') {
+          assert.match(result.stderr, /@casatwy\/deyo@0\.2\.2 must be published/)
+          assert.match(result.stderr, /FAIL Verify minimum npm CLI version \([^\n]+; exit=42\)/)
+          assert.match(result.stderr, /FAILURE stage=Verify minimum npm CLI version; exit=42; recovery_phase=none/)
+          assert.equal(result.stderr.match(/simulated npm lookup failure/g)?.length, 1)
+        }
         await assertMissing(fixture.statePath)
         assert.equal((await fixture.git(['tag', '--list'])).stdout, '')
       }
@@ -889,6 +958,8 @@ test('ambiguous ClawHub publish is reconciled and receipt records exact notes an
       MOCK_CLAWHUB_AMBIGUOUS: '1',
     })
     assert.equal(result.code, 0, result.stderr)
+    assert.match(result.stderr, /\[release\] MODE publish/)
+    assert.match(result.stderr, /\[release\] OK Write release receipt/)
     const receipt = await readJson(fixture.receiptPath)
     const archivedPath = path.join(fixture.repo, receipt.releaseNotesPath)
     const archived = await readFile(archivedPath, 'utf8')
@@ -921,11 +992,17 @@ test('pending review preserves one version and RESUME completes without republis
     })
     assert.equal(pending.code, 1)
     assert.match(pending.stderr, /Resume the same version/)
+    assert.match(pending.stderr, /\[release\] POLL ClawHub review:/)
+    assert.match(pending.stderr, /recovery_phase=tag_pushed/)
+    assert.match(pending.stderr, /next="make publish RESUME=1"/)
     assert.equal((await readJson(fixture.statePath)).phase, 'tag_pushed')
     const resumed = await fixture.formal(['--resume'], {
       MOCK_CONFIRM: 'resume deyo v1.0.9',
     })
     assert.equal(resumed.code, 0, resumed.stderr)
+    assert.match(resumed.stderr, /\[release\] MODE resume/)
+    assert.match(resumed.stderr, /\[release\] SKIP Prepare release workspace \(recovery phase tag_pushed\)/)
+    assert.match(resumed.stderr, /\[release\] SKIP Push immutable release tag \(recovery phase tag_pushed\)/)
     const commands = (await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'commands.log'), 'utf8'))
       .trim().split('\n').map(line => JSON.parse(line))
     assert.equal(commands.filter(args => args[0] === 'publish' && !args.includes('--dry-run')).length, 1)
@@ -949,6 +1026,14 @@ test('tag and master push failures retain phase and resume the same release', { 
           MOCK_GIT_FAIL_KIND: failure.kind,
         })
         assert.equal(failed.code, 1)
+        assert.match(failed.stderr, /\[release\] FAIL (Push immutable release tag|Push verified release to master)/)
+        assert.match(failed.stderr, new RegExp(`recovery_phase=${failure.phase}`))
+        assert.match(failed.stderr, /exit=42/)
+        assert.match(failed.stderr, /next="make publish RESUME=1"/)
+        assert.equal(
+          failed.stderr.match(new RegExp(`simulated ${failure.kind} push failure`, 'g'))?.length,
+          1,
+        )
         assert.equal((await readJson(fixture.statePath)).phase, failure.phase)
         const resumed = await fixture.formal(['--resume'], {
           MOCK_CONFIRM: 'resume deyo v1.0.9',
