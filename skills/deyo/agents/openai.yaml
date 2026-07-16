@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
   short_description: "用 deyo CLI 转写链接或本地音视频，流式整理正文并安全交付 TXT"
-  default_prompt: "Use $deyo to transcribe a link or one local media file, stream numbered cleaned paragraphs for non-raw text, rebuild from the private final raw file, publish with the bundled atomic no-clobber helper, and preserve SRT/VTT/JSON or explicit raw output exactly."
+  default_prompt: "Use $deyo only for my explicit request to transcribe this one URL or exact local media path. Stream cleaned paragraphs for non-raw text, rebuild from the private final raw file, publish with the atomic no-clobber helper, and preserve SRT/VTT/JSON or explicit raw exactly."
 
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false

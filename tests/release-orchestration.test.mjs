@@ -138,10 +138,13 @@ if (args[0] === 'whoami') {
 }
 if (args[0] === 'inspect' && args.includes('--versions')) {
   const current = published()
-  const versions = ['1.0.8', ...(current ? [current.version] : [])]
+  const versions = ['1.0.8', ...(current ? [current.version] : []), ...(process.env.MOCK_CLAWHUB_HIGHER === '1' ? ['1.0.10'] : [])]
   process.stdout.write(JSON.stringify({
     owner: { handle: 'casatwy' },
-    skill: { stats: { versions: versions.length }, tags: { latest: current?.version || '1.0.8' } },
+    skill: {
+      stats: { versions: versions.length },
+      tags: { latest: process.env.MOCK_CLAWHUB_LATEST || current?.version || '1.0.8' },
+    },
     versions: versions.map(version => ({ version })),
   }))
   process.exit(0)
@@ -156,13 +159,25 @@ if (args[0] === 'inspect' && args.includes('--version')) {
     }))
     process.exit(0)
   }
+  if (process.env.MOCK_CLAWHUB_NEXT_CONFLICT === requested) {
+    process.stdout.write(JSON.stringify({
+      skill: { tags: { latest: current?.version || '1.0.8' } },
+      version: { version: requested, files: [] },
+    }))
+    process.exit(0)
+  }
   if (!current || current.version !== requested) {
     process.stderr.write('version not found\\n')
     process.exit(1)
   }
+  const files = current.files.map((file, index) => (
+    process.env.MOCK_CLAWHUB_FINGERPRINT_MISMATCH === '1' && index === 0
+      ? { ...file, sha256: 'f'.repeat(64) }
+      : file
+  ))
   process.stdout.write(JSON.stringify({
-    skill: { tags: { latest: current.version } },
-    version: { version: current.version, files: current.files },
+    skill: { tags: { latest: process.env.MOCK_CLAWHUB_LATEST || current.version } },
+    version: { version: current.version, files },
   }))
   process.exit(0)
 }
@@ -192,8 +207,30 @@ if (args[0] === 'publish') {
   process.exit(0)
 }
 if (args[0] === 'skill' && args[1] === 'verify') {
-  const pending = process.env.MOCK_CLAWHUB_VERIFY === 'pending'
-  process.stdout.write(JSON.stringify(pending ? {
+  const mode = process.env.MOCK_CLAWHUB_VERIFY || 'pass'
+  if (mode.startsWith('terminal')) {
+    const requested = args[args.indexOf('--version') + 1]
+    process.stdout.write(JSON.stringify({
+      slug: 'deyo',
+      publisherHandle: 'casatwy',
+      version: mode === 'terminal-wrong-version' ? '9.9.9' : requested,
+      resolvedFrom: 'version',
+      ok: false,
+      decision: 'fail',
+      reasons: mode === 'terminal-extra'
+        ? ['security.status_not_clean', 'security.other']
+        : ['security.status_not_clean'],
+      security: {
+        passed: false,
+        status: mode === 'terminal-unknown-status' ? 'unknown' : 'suspicious',
+        verdict: mode === 'terminal-unknown-status' ? 'unknown' : 'suspicious',
+        summary: 'simulated terminal security result',
+        signals: { staticScan: { status: 'suspicious', scanId: 'scan-terminal-1' } },
+      },
+    }))
+    process.exit(1)
+  }
+  process.stdout.write(JSON.stringify(mode === 'pending' ? {
     ok: true,
     decision: 'review',
     security: { passed: false, status: 'pending' },
@@ -224,13 +261,15 @@ const path = require('node:path')
 const command = path.basename(process.argv[1])
 const args = process.argv.slice(2)
 if (command === 'npm' && args[0] === 'view') {
-  process.stdout.write(JSON.stringify('0.2.0'))
+  process.stdout.write(JSON.stringify('0.2.1'))
   process.exit(0)
 }
 if (command === 'pnpm') {
-  if (process.env.MOCK_PNPM_FAIL_ON_TARGET === '1') {
+  const failTarget = process.env.MOCK_PNPM_FAIL_ON_TARGET
+  if (failTarget) {
     const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'deyo', 'manifest.json'), 'utf8'))
-    if (manifest.skillVersion === '1.0.9') {
+    const expectedVersion = failTarget === '1' ? '1.0.9' : failTarget
+    if (manifest.skillVersion === expectedVersion) {
       process.stderr.write('simulated provider E2E failure after freeze\\n')
       process.exit(42)
     }
@@ -302,7 +341,10 @@ async function createFixture() {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
   manifest.skillVersion = '1.0.8'
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-  await rm(path.join(repo, 'release', 'notes', 'v1.0.9.md'), { force: true })
+  // A real release writes its target note before running this suite. Keep the
+  // fixture independent from whichever release is currently being prepared,
+  // otherwise that outer note collides with the fixture's simulated versions.
+  await rm(path.join(repo, 'release', 'notes'), { recursive: true, force: true })
   await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: repo, env: process.env })
 
   const setupEnv = { ...process.env }
@@ -336,7 +378,11 @@ async function createFixture() {
     env,
     statePath: path.join(repo, '.git', 'deyo-release', 'state.json'),
     abortedDirectory: path.join(repo, '.git', 'deyo-release', 'aborted'),
+    abandonedDirectory: path.join(repo, '.git', 'deyo-release', 'abandoned'),
     receiptPath: path.join(repo, '.git', 'deyo-release', 'receipts', 'v1.0.9.json'),
+    receiptPathFor(version) {
+      return path.join(repo, '.git', 'deyo-release', 'receipts', `v${version}.json`)
+    },
     async cli(args, extraEnv = {}) {
       return await run(process.execPath, [path.join(repo, 'scripts', 'release.mjs'), ...args], {
         cwd: repo,
@@ -404,6 +450,49 @@ async function createPartiallyPreparedFrozenRelease(fixture) {
   return frozen
 }
 
+async function createTerminalSecurityRelease(fixture) {
+  const result = await fixture.formal([], {
+    MOCK_CONFIRM: 'publish deyo v1.0.9',
+    MOCK_CLAWHUB_VERIFY: 'terminal',
+    MOCK_REVIEW_TIMEOUT_MS: '0',
+  })
+  assert.equal(result.code, 1)
+  assert.match(result.stderr, /verification rejected|security/i)
+  const state = await readJson(fixture.statePath)
+  assert.equal(state.phase, 'tag_pushed')
+  assert.equal(state.targetVersion, '1.0.9')
+  return state
+}
+
+async function createFixForwardAheadFrozenRelease(fixture) {
+  const failed = await createTerminalSecurityRelease(fixture)
+  const remoteBase = (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim()
+  const abandoned = await fixture.formal(['--fix-forward'], {
+    MOCK_CONFIRM: 'fix-forward deyo v1.0.9 to v1.0.10',
+    MOCK_CLAWHUB_VERIFY: 'terminal',
+  })
+  assert.equal(abandoned.code, 0, abandoned.stderr)
+
+  const canonicalPath = path.join(fixture.repo, 'deyo', 'SKILL.md')
+  await writeFile(canonicalPath, `${await readFile(canonicalPath, 'utf8')}\n<!-- simulated abortable fix-forward -->\n`)
+  await writeFile(path.join(fixture.repo, 'release', 'next.md'), '# Abortable fix-forward\n')
+  await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: fixture.repo, env: process.env })
+
+  const result = await fixture.formal([], {
+    MOCK_CONFIRM: 'publish deyo v1.0.10',
+    MOCK_PNPM_FAIL_ON_TARGET: '1.0.10',
+  })
+  assert.equal(result.code, 1)
+  assert.match(result.stderr, /simulated provider E2E failure after freeze/)
+  const frozen = await readJson(fixture.statePath)
+  assert.equal(frozen.phase, 'frozen')
+  assert.equal(frozen.targetVersion, '1.0.10')
+  assert.equal(frozen.baseCommit, failed.releaseCommit)
+  assert.equal(frozen.remoteBaseCommit, remoteBase)
+  await writeFile(path.join(fixture.repo, 'tests', 'after-fix-forward-freeze.txt'), 'fixed after freeze\n')
+  return { failed, frozen, remoteBase }
+}
+
 test('release dry-run computes 1.0.9 and performs zero repository writes', { timeout: 30_000 }, async () => {
   const fixture = await createFixture()
   try {
@@ -465,6 +554,54 @@ test('guarded abort archives a source-mismatched partial freeze and normal publi
   }
 })
 
+test('guarded abort preserves a fix-forward remote base and restarts the same target', { timeout: 90_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const { failed, frozen, remoteBase } = await createFixForwardAheadFrozenRelease(fixture)
+    const statusBefore = (await fixture.git(['status', '--porcelain'])).stdout
+    const aborted = await fixture.formal(['--abort'], { MOCK_CONFIRM: 'abort deyo v1.0.10' })
+    assert.equal(aborted.code, 0, aborted.stderr)
+    const audit = JSON.parse(aborted.stdout.trim().split('\n').at(-1))
+    assert.equal(audit.kind, 'deyo.frozen-release-abort')
+    assert.equal(audit.remoteMaster, remoteBase)
+    assert.equal(audit.state.remoteBaseCommit, remoteBase)
+    assert.equal(audit.state.baseCommit, failed.releaseCommit)
+    assert.notEqual(audit.currentSourceSnapshot, frozen.sourceSnapshot)
+    await assertMissing(fixture.statePath)
+    assert.equal((await fixture.git(['status', '--porcelain'])).stdout, statusBefore)
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), remoteBase)
+    assert.equal((await fixture.git(['tag', '--list', 'v1.0.10'])).stdout, '')
+
+    const restarted = await fixture.formal([], { MOCK_CONFIRM: 'publish deyo v1.0.10' })
+    assert.equal(restarted.code, 0, restarted.stderr)
+    const receipt = await readJson(fixture.receiptPathFor('1.0.10'))
+    assert.equal(receipt.skillVersion, '1.0.10')
+    const finalHead = (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), finalHead)
+    assert.equal((await fixture.git(['rev-parse', 'HEAD^'])).stdout.trim(), failed.releaseCommit)
+    await assertMissing(fixture.statePath)
+  }
+  finally {
+    await fixture.cleanup()
+  }
+})
+
+test('guarded abort rejects drift from a fix-forward remote base', { timeout: 60_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const { frozen } = await createFixForwardAheadFrozenRelease(fixture)
+    await fixture.git(['push', 'origin', `${frozen.baseCommit}:refs/heads/master`])
+    const aborted = await fixture.formal(['--abort'], { MOCK_CONFIRM: 'abort deyo v1.0.10' })
+    assert.equal(aborted.code, 1)
+    assert.match(aborted.stderr, /origin\/master no longer matches the frozen base commit/)
+    assert.deepEqual(await readJson(fixture.statePath), frozen)
+    await assertMissing(fixture.abortedDirectory)
+  }
+  finally {
+    await fixture.cleanup()
+  }
+})
+
 test('guarded abort rejects phase, tag, exact-version, Git drift, confirmation, non-TTY, and CI conflicts', { timeout: 90_000 }, async (t) => {
   const scenarios = [
     { name: 'phase', expected: /Only a frozen release/, state: { phase: 'prepared', canonicalTreeHash: 'c'.repeat(64) } },
@@ -520,6 +657,205 @@ test('guarded abort rejects phase, tag, exact-version, Git drift, confirmation, 
   }
 })
 
+test('terminal security fix-forward archives 1.0.9 and activates only pass-clean 1.0.10', { timeout: 60_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const failed = await createTerminalSecurityRelease(fixture)
+    const remoteBase = (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim()
+    const statusBefore = (await fixture.git(['status', '--porcelain'])).stdout
+    const fixedForward = await fixture.formal(['--fix-forward'], {
+      MOCK_CONFIRM: 'fix-forward deyo v1.0.9 to v1.0.10',
+      MOCK_CLAWHUB_VERIFY: 'terminal',
+    })
+    assert.equal(fixedForward.code, 0, fixedForward.stderr)
+    assert.match(fixedForward.stdout, /worktree, tags, ClawHub, latest, and origin\/master will not be changed/)
+    const auditResult = JSON.parse(fixedForward.stdout.trim().split('\n').at(-1))
+    assert.equal(auditResult.kind, 'deyo.terminal-security-fix-forward')
+    assert.equal(auditResult.nextTarget, '1.0.10')
+    assert.equal(auditResult.reason, 'security.status_not_clean')
+    assert.equal(auditResult.terminalSecurity.security.signals.staticScan.scanId, 'scan-terminal-1')
+    assert.equal(auditResult.state.releaseCommit, failed.releaseCommit)
+    await assertMissing(fixture.statePath)
+    assert.equal((await fixture.git(['status', '--porcelain'])).stdout, statusBefore)
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), remoteBase)
+    assert.equal((await fixture.git(['rev-parse', 'refs/tags/v1.0.9^{}'])).stdout.trim(), failed.releaseCommit)
+
+    const auditPath = path.join(fixture.repo, auditResult.archivePath)
+    const archivedStatePath = path.join(fixture.repo, auditResult.archivedStatePath)
+    assert.equal((await stat(fixture.abandonedDirectory)).mode & 0o777, 0o700)
+    assert.equal((await stat(path.dirname(auditPath))).mode & 0o777, 0o700)
+    assert.equal((await stat(auditPath)).mode & 0o777, 0o600)
+    assert.equal((await stat(archivedStatePath)).mode & 0o777, 0o600)
+    assert.deepEqual((await readJson(auditPath)).state, failed)
+    assert.deepEqual(await readJson(archivedStatePath), failed)
+
+    const canonicalPath = path.join(fixture.repo, 'deyo', 'SKILL.md')
+    await writeFile(canonicalPath, `${await readFile(canonicalPath, 'utf8')}\n<!-- simulated terminal-security fix -->\n`)
+    await writeFile(path.join(fixture.repo, 'release', 'next.md'), '# Security fix-forward\n\n- Narrow terminal behavior.\n')
+    await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: fixture.repo, env: process.env })
+
+    const fixed = await fixture.formal([], { MOCK_CONFIRM: 'publish deyo v1.0.10' })
+    assert.equal(fixed.code, 0, fixed.stderr)
+    const receipt = await readJson(fixture.receiptPathFor('1.0.10'))
+    assert.equal(receipt.skillVersion, '1.0.10')
+    assert.equal(receipt.minimumCliVersion, '0.2.1')
+    assert.equal(receipt.clawHubProjectionKind, 'openclaw-v1')
+    assert.match(receipt.clawHubProjectionTreeHash, /^[a-f0-9]{64}$/)
+    assert.notEqual(receipt.clawHubProjectionTreeHash, receipt.canonicalTreeHash)
+    const snapshot = path.join(fixture.env.MOCK_CLAWHUB_STATE, 'snapshot')
+    await assertMissing(path.join(snapshot, 'agents'))
+    const projectedSkill = await readFile(path.join(snapshot, 'SKILL.md'), 'utf8')
+    assert.match(projectedSkill, /^user-invocable: true$/m)
+    assert.match(projectedSkill, /^disable-model-invocation: true$/m)
+    assert.doesNotMatch(projectedSkill, /--language zh\b/)
+    await fixture.git(['show', 'v1.0.10:deyo/agents/openai.yaml'])
+    const providerMetadata = await readJson(path.join(fixture.repo, 'providers', 'metadata.json'))
+    assert.equal(providerMetadata.canonicalTreeHash, receipt.canonicalTreeHash)
+    assert.equal(providerMetadata.providers.openclaw.artifactProjection, 'openclaw-v1')
+    const newHead = (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), newHead)
+    assert.equal((await fixture.git(['rev-parse', 'HEAD^'])).stdout.trim(), failed.releaseCommit)
+    assert.equal((await fixture.git(['merge-base', '--is-ancestor', remoteBase, newHead])).code, 0)
+    await assertMissing(fixture.statePath)
+  }
+  finally {
+    await fixture.cleanup()
+  }
+})
+
+test('successive terminal releases preserve the original remote base and fix-forward again', { timeout: 90_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const failed109 = await createTerminalSecurityRelease(fixture)
+    const remoteBase = (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim()
+    const abandoned109 = await fixture.formal(['--fix-forward'], {
+      MOCK_CONFIRM: 'fix-forward deyo v1.0.9 to v1.0.10',
+      MOCK_CLAWHUB_VERIFY: 'terminal',
+    })
+    assert.equal(abandoned109.code, 0, abandoned109.stderr)
+
+    const canonicalPath = path.join(fixture.repo, 'deyo', 'SKILL.md')
+    await writeFile(canonicalPath, `${await readFile(canonicalPath, 'utf8')}\n<!-- simulated first security fix -->\n`)
+    await writeFile(path.join(fixture.repo, 'release', 'next.md'), '# First security fix-forward\n')
+    await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: fixture.repo, env: process.env })
+
+    const failed110Result = await fixture.formal([], {
+      MOCK_CONFIRM: 'publish deyo v1.0.10',
+      MOCK_CLAWHUB_VERIFY: 'terminal',
+      MOCK_REVIEW_TIMEOUT_MS: '0',
+    })
+    assert.equal(failed110Result.code, 1)
+    const failed110 = await readJson(fixture.statePath)
+    assert.equal(failed110.phase, 'tag_pushed')
+    assert.equal(failed110.baseVersion, '1.0.9')
+    assert.equal(failed110.targetVersion, '1.0.10')
+    assert.equal(failed110.baseCommit, failed109.releaseCommit)
+    assert.equal(failed110.remoteBaseCommit, remoteBase)
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), remoteBase)
+
+    const abandoned110 = await fixture.formal(['--fix-forward'], {
+      MOCK_CONFIRM: 'fix-forward deyo v1.0.10 to v1.0.11',
+      MOCK_CLAWHUB_VERIFY: 'terminal',
+    })
+    assert.equal(abandoned110.code, 0, abandoned110.stderr)
+    const audit110 = JSON.parse(abandoned110.stdout.trim().split('\n').at(-1))
+    assert.equal(audit110.nextTarget, '1.0.11')
+    assert.equal(audit110.remoteMaster, remoteBase)
+
+    await writeFile(canonicalPath, `${await readFile(canonicalPath, 'utf8')}\n<!-- simulated second security fix -->\n`)
+    await writeFile(path.join(fixture.repo, 'release', 'next.md'), '# Second security fix-forward\n')
+    await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: fixture.repo, env: process.env })
+
+    const fixed111 = await fixture.formal([], { MOCK_CONFIRM: 'publish deyo v1.0.11' })
+    assert.equal(fixed111.code, 0, fixed111.stderr)
+    const receipt = await readJson(fixture.receiptPathFor('1.0.11'))
+    assert.equal(receipt.skillVersion, '1.0.11')
+    const finalHead = (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), finalHead)
+    assert.equal((await fixture.git(['rev-parse', 'HEAD^'])).stdout.trim(), failed110.releaseCommit)
+    assert.equal((await fixture.git(['rev-parse', 'HEAD^^'])).stdout.trim(), failed109.releaseCommit)
+    await assertMissing(fixture.statePath)
+  }
+  finally {
+    await fixture.cleanup()
+  }
+})
+
+test('terminal security fix-forward rejects unsafe state, evidence, environment, and confirmation', { timeout: 180_000 }, async (t) => {
+  const scenarios = [
+    { name: 'phase', expected: /tag_pushed/, mutate: async (fixture) => {
+      const state = await readJson(fixture.statePath)
+      state.phase = 'tagged'
+      await writeFile(fixture.statePath, `${JSON.stringify(state, null, 2)}\n`)
+    } },
+    { name: 'receipt', expected: /success receipt/, mutate: async (fixture) => {
+      await mkdir(path.dirname(fixture.receiptPath), { recursive: true })
+      await writeFile(fixture.receiptPath, '{}\n')
+    } },
+    { name: 'head', expected: /local master/, mutate: async (fixture) => {
+      await writeFile(path.join(fixture.repo, 'tests', 'head-drift.txt'), 'drift\n')
+      await fixture.git(['add', '-A'])
+      await fixture.git(['commit', '-m', 'head drift'])
+    } },
+    { name: 'remote', expected: /origin\/master/, mutate: async (fixture) => {
+      const failed = await readJson(fixture.statePath)
+      await fixture.git(['push', 'origin', `${failed.releaseCommit}:refs/heads/master`])
+    } },
+    { name: 'local-tag', expected: /Local tag/, mutate: async (fixture) => {
+      await fixture.git(['tag', '-f', 'v1.0.9', 'HEAD^'])
+    } },
+    { name: 'remote-tag', expected: /Remote tag/, mutate: async (fixture) => {
+      const failed = await readJson(fixture.statePath)
+      const parent = (await fixture.git(['rev-parse', `${failed.releaseCommit}^`])).stdout.trim()
+      await fixture.git(['tag', '-f', 'remote-wrong', parent])
+      await fixture.git(['push', '--force', 'origin', 'refs/tags/remote-wrong:refs/tags/v1.0.9'])
+    } },
+    { name: 'tree', expected: /Tagged artifact tree/, mutate: async (fixture) => {
+      const state = await readJson(fixture.statePath)
+      state.canonicalTreeHash = 'f'.repeat(64)
+      await writeFile(fixture.statePath, `${JSON.stringify(state, null, 2)}\n`)
+    } },
+    { name: 'state-fingerprint', expected: /frozen file fingerprint/, mutate: async (fixture) => {
+      const state = await readJson(fixture.statePath)
+      state.clawHubFileFingerprint = [{ path: 'SKILL.md', size: 1, sha256: 'f'.repeat(64) }]
+      await writeFile(fixture.statePath, `${JSON.stringify(state, null, 2)}\n`)
+    } },
+    { name: 'fingerprint', expected: /different artifact fingerprint/, env: { MOCK_CLAWHUB_FINGERPRINT_MISMATCH: '1' } },
+    { name: 'verdict', expected: /terminal suspicious verification failure only/, env: { MOCK_CLAWHUB_VERIFY: 'terminal-extra' } },
+    { name: 'verdict-identity', expected: /exact @casatwy\/deyo@1\.0\.9/, env: { MOCK_CLAWHUB_VERIFY: 'terminal-wrong-version' } },
+    { name: 'verdict-status', expected: /terminal suspicious verification/, env: { MOCK_CLAWHUB_VERIFY: 'terminal-unknown-status' } },
+    { name: 'latest', expected: /latest is not/, env: { MOCK_CLAWHUB_LATEST: '1.0.8' } },
+    { name: 'higher', expected: /highest version/, env: { MOCK_CLAWHUB_HIGHER: '1' } },
+    { name: 'next', expected: /next patch 1\.0\.10 already exists/, env: { MOCK_CLAWHUB_NEXT_CONFLICT: '1.0.10' } },
+    { name: 'confirmation', expected: /confirmation mismatch/, confirm: 'wrong' },
+    { name: 'non-tty', expected: /interactive TTY/, nonTty: true },
+    { name: 'ci', expected: /forbidden in CI/, env: { CI: 'true' } },
+  ]
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const fixture = await createFixture()
+      try {
+        await createTerminalSecurityRelease(fixture)
+        if (scenario.mutate) await scenario.mutate(fixture)
+        const env = { MOCK_CLAWHUB_VERIFY: 'terminal', ...(scenario.env || {}) }
+        const result = scenario.nonTty
+          ? await fixture.cli(['--fix-forward'], env)
+          : await fixture.formal(['--fix-forward'], {
+              ...env,
+              MOCK_CONFIRM: scenario.confirm || 'fix-forward deyo v1.0.9 to v1.0.10',
+            })
+        assert.equal(result.code, 1, result.stderr)
+        assert.match(result.stderr, scenario.expected)
+        await access(fixture.statePath)
+        await assertMissing(fixture.abandonedDirectory)
+      }
+      finally {
+        await fixture.cleanup()
+      }
+    })
+  }
+})
+
 test('formal release rejects non-TTY, CI, confirmation mismatch, and ClawHub auth before state', { timeout: 40_000 }, async (t) => {
   for (const scenario of ['non-tty', 'ci', 'confirmation', 'auth']) {
     await t.test(scenario, async () => {
@@ -558,6 +894,8 @@ test('ambiguous ClawHub publish is reconciled and receipt records exact notes an
     const archived = await readFile(archivedPath, 'utf8')
     assert.equal(receipt.skillVersion, '1.0.9')
     assert.equal(receipt.clawHubLicense, 'MIT-0')
+    assert.equal(receipt.clawHubProjectionKind, 'legacy-full')
+    assert.equal(receipt.clawHubProjectionTreeHash, receipt.canonicalTreeHash)
     assert.equal(receipt.releaseNotesPath, 'release/notes/v1.0.9.md')
     assert.equal(receipt.releaseNotes, archived)
     assert.equal(receipt.releaseNotesHash, (await import('../scripts/release-core.mjs')).sha256(archived))
@@ -623,5 +961,35 @@ test('tag and master push failures retain phase and resume the same release', { 
         await fixture.cleanup()
       }
     })
+  }
+})
+
+test('clawhub-ready resume rejects projection evidence drift before activating master', { timeout: 30_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const failed = await fixture.formal([], {
+      MOCK_CONFIRM: 'publish deyo v1.0.9',
+      MOCK_GIT_FAIL_KIND: 'master',
+    })
+    assert.equal(failed.code, 1)
+    const state = await readJson(fixture.statePath)
+    assert.equal(state.phase, 'clawhub_ready')
+    state.clawHubProjectionTreeHash = 'f'.repeat(64)
+    state.clawHubFileFingerprint = [{ path: 'SKILL.md', size: 1, sha256: 'e'.repeat(64) }]
+    await writeFile(fixture.statePath, `${JSON.stringify(state, null, 2)}\n`)
+
+    const resumed = await fixture.formal(['--resume'], {
+      MOCK_CONFIRM: 'resume deyo v1.0.9',
+    })
+    assert.equal(resumed.code, 1)
+    assert.match(resumed.stderr, /projection tree hash differs/)
+    assert.notEqual(
+      (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(),
+      state.releaseCommit,
+    )
+    await access(fixture.statePath)
+  }
+  finally {
+    await fixture.cleanup()
   }
 })

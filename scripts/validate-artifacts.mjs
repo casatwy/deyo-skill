@@ -33,6 +33,7 @@ async function validateSkillFrontmatter(relativePath) {
 async function validateYaml(relativePath) {
   const value = parseYaml(await readFile(path.join(root, relativePath), 'utf8'))
   assert(value && typeof value === 'object', `${relativePath} must contain YAML metadata`)
+  return value
 }
 
 function assertVersion(value, expected, label) {
@@ -51,13 +52,21 @@ export async function validateArtifacts() {
   const version = canonical.skillVersion
   assertVersion(version, version, 'canonical Skill version')
   assertStableSemver(canonical.minimumCliVersion, 'minimum CLI version')
+  assert(canonical.minimumCliVersion === '0.2.1', 'fix-forward Skill minimum CLI version must be 0.2.1')
 
   await validateSkillFrontmatter('deyo/SKILL.md')
-  await Promise.all([
+  const canonicalSkill = await readFile(path.join(root, 'deyo/SKILL.md'), 'utf8')
+  assert(!/--language zh\b/.test(canonicalSkill), 'canonical Skill must not hardcode --language zh')
+  assert(/automatic language detection/.test(canonicalSkill), 'canonical Skill must explain automatic language detection')
+  assert(/Explicit Authorization Boundary/.test(canonicalSkill), 'canonical Skill must define an explicit authorization boundary')
+  const [openaiAgent, claudeAgent] = await Promise.all([
     validateYaml('deyo/agents/openai.yaml'),
     validateYaml('deyo/agents/claude.yaml'),
     validateYaml('deyo/agents/gemini.yaml'),
   ])
+  assert(openaiAgent.policy?.allow_implicit_invocation === false, 'OpenAI implicit invocation must be disabled')
+  assert(claudeAgent.claude_code?.invocation?.implicit === false, 'Claude implicit invocation must be disabled')
+  assert(claudeAgent.policy?.allow_implicit_invocation === false, 'Claude implicit invocation policy must be disabled')
 
   const [codex, claude, gemini, metadata, codexMarketplace, claudeMarketplace] = await Promise.all([
     readJson('plugins/deyo/.codex-plugin/plugin.json'),
@@ -103,6 +112,11 @@ export async function validateArtifacts() {
   assert(metadata.providers?.claude?.plugin === 'deyo@deyo-official', 'Claude metadata plugin mismatch')
   assert(metadata.providers?.openclaw?.registry === '@casatwy/deyo', 'OpenClaw registry mismatch')
   assert(metadata.providers?.openclaw?.license === 'MIT-0', 'OpenClaw/ClawHub license must be MIT-0')
+  assert(metadata.providers?.openclaw?.artifactProjection === 'openclaw-v1', 'OpenClaw projection metadata mismatch')
+  assert(metadata.providers?.openclaw?.projectionSince === '1.0.10', 'OpenClaw projection version mismatch')
+  assert(JSON.stringify(metadata.providers?.openclaw?.excludedPaths) === JSON.stringify(['agents/**']), 'OpenClaw excluded paths mismatch')
+  assert(metadata.providers?.openclaw?.userInvocable === true, 'OpenClaw must be user-invocable')
+  assert(metadata.providers?.openclaw?.disableModelInvocation === true, 'OpenClaw model invocation must be disabled')
   await validatePluginSkill('plugins/deyo/skills/deyo', canonicalHash)
   await validatePluginSkill('skills/deyo', canonicalHash)
 

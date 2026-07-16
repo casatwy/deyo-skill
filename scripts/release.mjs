@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { chmod, cp, mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -18,6 +18,7 @@ import {
   compareFingerprints,
   ClawHubConflictError,
   confirmationPhrase,
+  fixForwardConfirmationPhrase,
   hashTree,
   phaseAtLeast,
   reconcileResumeGitState,
@@ -27,8 +28,10 @@ import {
   validateReleaseNotes,
   validateFrozenAbortState,
   validateReleaseState,
+  validateTerminalFixForwardState,
 } from './release-core.mjs'
 import { generateProviders } from './generate-providers.mjs'
+import { projectClawHubSkill } from './clawhub-projection.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clawhub = path.join(root, 'node_modules', '.bin', 'clawhub')
@@ -36,6 +39,7 @@ const recoveryDirectory = path.join(root, '.git', 'deyo-release')
 const statePath = path.join(recoveryDirectory, 'state.json')
 const receiptsDirectory = path.join(recoveryDirectory, 'receipts')
 const abortedDirectory = path.join(recoveryDirectory, 'aborted')
+const abandonedDirectory = path.join(recoveryDirectory, 'abandoned')
 const officialRef = '@casatwy/deyo'
 const NETWORK_TIMEOUT_MS = 30_000
 const CLAWHUB_LICENSE = 'MIT-0'
@@ -49,16 +53,17 @@ export function isCiEnvironment(environment = process.env) {
 }
 
 export function parseReleaseOptions(argv) {
-  const known = new Set(['--abort', '--dry-run', '--resume'])
+  const known = new Set(['--abort', '--dry-run', '--fix-forward', '--resume'])
   for (const value of argv) if (!known.has(value)) throw new Error(`Unknown release option: ${value}`)
   if (new Set(argv).size !== argv.length) throw new Error('Release options must not be repeated')
   const dryRun = argv.includes('--dry-run')
   const resume = argv.includes('--resume')
   const abort = argv.includes('--abort')
-  if ([dryRun, resume, abort].filter(Boolean).length > 1) {
-    throw new Error('--abort, --dry-run, and --resume cannot be combined')
+  const fixForward = argv.includes('--fix-forward')
+  if ([dryRun, resume, abort, fixForward].filter(Boolean).length > 1) {
+    throw new Error('--abort, --dry-run, --fix-forward, and --resume cannot be combined')
   }
-  return { abort, dryRun, resume }
+  return { abort, dryRun, fixForward, resume }
 }
 
 async function command(commandName, args, options = {}) {
@@ -259,6 +264,7 @@ async function assertTargetTagsAbsent(targetVersion) {
 
 async function frozenAbortPreflight(state) {
   const frozen = validateFrozenAbortState(state)
+  const expectedRemoteBase = frozen.remoteBaseCommit ?? frozen.baseCommit
   await assertGitPreflight()
   await assertLocalTooling()
 
@@ -267,7 +273,7 @@ async function frozenAbortPreflight(state) {
     throw new Error('Cannot abort because local master no longer matches the frozen base commit')
   }
   const remoteMaster = await remoteMasterCommit()
-  if (remoteMaster !== frozen.baseCommit) {
+  if (remoteMaster !== expectedRemoteBase) {
     throw new Error('Cannot abort because origin/master no longer matches the frozen base commit')
   }
   await assertTargetTagsAbsent(frozen.targetVersion)
@@ -288,22 +294,47 @@ async function frozenAbortPreflight(state) {
   return {
     state: frozen,
     currentSourceSnapshot: await sourceSnapshot(frozen.baseVersion, frozen.targetVersion),
+    remoteMaster,
   }
 }
 
 async function verifyExact(version) {
-  const result = await textCommand(clawhub, ['skill', 'verify', officialRef, '--version', version], { timeoutMs: NETWORK_TIMEOUT_MS })
-  return JSON.parse(result.stdout)
+  const result = await textCommand(
+    clawhub,
+    ['skill', 'verify', officialRef, '--version', version],
+    { allowFailure: true, timeoutMs: NETWORK_TIMEOUT_MS },
+  )
+  const payload = (result.stdout || result.stderr).trim()
+  try {
+    return JSON.parse(payload)
+  }
+  catch {
+    if (result.code !== 0) {
+      throw new Error(`Could not verify ClawHub ${version}: ${payload || `exit ${result.code}`}`)
+    }
+    throw new Error(`ClawHub verification returned invalid JSON for ${version}`)
+  }
 }
 
 async function stageCanonicalVersion(version) {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), 'deyo-clawhub-stage-'))
-  await cp(path.join(root, 'deyo'), temporary, { recursive: true, dereference: false, preserveTimestamps: false })
-  const manifestPath = path.join(temporary, 'manifest.json')
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-  manifest.skillVersion = version
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-  return temporary
+  const canonical = await mkdtemp(path.join(os.tmpdir(), 'deyo-canonical-stage-'))
+  const projected = await mkdtemp(path.join(os.tmpdir(), 'deyo-clawhub-stage-'))
+  try {
+    await cp(path.join(root, 'deyo'), canonical, { recursive: true, dereference: false, preserveTimestamps: false })
+    const manifestPath = path.join(canonical, 'manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    manifest.skillVersion = version
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    await projectClawHubSkill(canonical, projected)
+    return projected
+  }
+  catch (error) {
+    await rm(projected, { recursive: true, force: true })
+    throw error
+  }
+  finally {
+    await rm(canonical, { recursive: true, force: true })
+  }
 }
 
 async function runRepositoryValidation() {
@@ -346,7 +377,6 @@ async function fullPreflight({ resume, state }) {
   await assertLocalTooling()
   const remoteMaster = await remoteMasterCommit()
   const localHead = (await git(['rev-parse', 'HEAD'])).stdout.trim()
-  if (!resume && localHead !== remoteMaster) throw new Error('Local master must exactly match official origin/master before a new release')
   if (resume) {
     let localHeadParent = null
     let localHeadSubject = null
@@ -374,6 +404,11 @@ async function fullPreflight({ resume, state }) {
   assertTargetAbsent(allocation.versions, allocation.targetVersion)
   const exact = await inspectExact(allocation.targetVersion)
   if (exact) throw new Error(`ClawHub target ${allocation.targetVersion} is already reserved`)
+  let remoteBaseCommit = null
+  if (localHead !== remoteMaster) {
+    await authorizeAbandonedFixForwardBase({ localHead, remoteMaster, allocation, inspect })
+    remoteBaseCommit = remoteMaster
+  }
   await assertCliPublished(canonical.minimumCliVersion, allocation.targetVersion)
   const releaseNotes = validateReleaseNotes(await readFile(path.join(root, 'release/next.md'))).content
   const stage = await stageCanonicalVersion(allocation.targetVersion)
@@ -383,7 +418,7 @@ async function fullPreflight({ resume, state }) {
   finally {
     await rm(stage, { recursive: true, force: true })
   }
-  return { canonical, allocation, releaseNotes }
+  return { canonical, allocation, releaseNotes, remoteBaseCommit }
 }
 
 async function confirm(targetVersion, resume, runtime = {}) {
@@ -405,10 +440,10 @@ async function confirm(targetVersion, resume, runtime = {}) {
 function assertFormalEnvironment(runtime = {}) {
   const environment = runtime.environment ?? process.env
   if (isCiEnvironment(environment)) {
-    throw new Error('Formal Skill publishing and abort are forbidden in CI environments')
+    throw new Error('Formal Skill publishing, abort, and fix-forward are forbidden in CI environments')
   }
   const interactive = runtime.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
-  if (!interactive) throw new Error('Formal Skill publishing and abort require an interactive TTY')
+  if (!interactive) throw new Error('Formal Skill publishing, abort, and fix-forward require an interactive TTY')
 }
 
 async function confirmAbort(targetVersion, runtime = {}) {
@@ -446,6 +481,7 @@ async function archiveFrozenAbort(originalState, preflight) {
     abortedAt: new Date().toISOString(),
     reason: 'maintainer_requested_safe_restart',
     currentSourceSnapshot: preflight.currentSourceSnapshot,
+    remoteMaster: preflight.remoteMaster,
   }
   await atomicPrivateJson(abortReceiptPath, receipt)
   await chmod(statePath, 0o600)
@@ -476,6 +512,288 @@ async function abortFrozenRelease(state, runtime = {}) {
     process.stdout.write('Release source changed while confirming; the final snapshot will be recorded in the abort archive.\n')
   }
   return await archiveFrozenAbort(state, finalPreflight)
+}
+
+function terminalSecurityEvidence(verification, targetVersion) {
+  const reasons = verification?.reasons
+  const security = verification?.security
+  if (
+    verification?.slug !== 'deyo' ||
+    verification?.publisherHandle !== 'casatwy' ||
+    verification?.version !== targetVersion ||
+    verification?.resolvedFrom !== 'version' ||
+    verification?.ok !== false ||
+    verification?.decision !== 'fail' ||
+    !Array.isArray(reasons) ||
+    reasons.length !== 1 ||
+    reasons[0] !== 'security.status_not_clean' ||
+    security?.passed !== false ||
+    security?.status !== 'suspicious'
+  ) {
+    throw new Error(
+      `Fix-forward requires exact @casatwy/deyo@${targetVersion} terminal suspicious verification ` +
+      'failure only for security.status_not_clean',
+    )
+  }
+  return JSON.parse(JSON.stringify({
+    slug: verification.slug,
+    publisherHandle: verification.publisherHandle,
+    version: verification.version,
+    resolvedFrom: verification.resolvedFrom,
+    decision: verification.decision,
+    reasons,
+    security,
+  }))
+}
+
+async function tagEvidence(state) {
+  const local = await git(['rev-parse', '-q', '--verify', `refs/tags/${state.tag}^{commit}`], { allowFailure: true })
+  if (local.code !== 0 || local.stdout.trim() !== state.releaseCommit) {
+    throw new Error(`Local tag ${state.tag} does not resolve to the frozen release commit`)
+  }
+  const remote = await git(
+    ['ls-remote', '--tags', 'origin', `refs/tags/${state.tag}`, `refs/tags/${state.tag}^{}`],
+    { timeoutMs: NETWORK_TIMEOUT_MS },
+  )
+  const refs = new Map(remote.stdout.trim().split('\n').filter(Boolean).map((line) => {
+    const [commit, ref] = line.trim().split(/\s+/)
+    return [ref, commit]
+  }))
+  const tagObject = refs.get(`refs/tags/${state.tag}`)
+  const commit = refs.get(`refs/tags/${state.tag}^{}`)
+  if (!/^[a-f0-9]{40}$/.test(tagObject ?? '') || commit !== state.releaseCommit) {
+    throw new Error(`Remote tag ${state.tag} does not resolve to the frozen release commit`)
+  }
+
+  const stage = await archiveTaggedSkill(state.tag)
+  try {
+    const treeHash = await hashTree(stage)
+    if (treeHash !== state.canonicalTreeHash) {
+      throw new Error('Tagged artifact tree differs from the frozen canonical tree hash')
+    }
+    const projected = await mkdtemp(path.join(os.tmpdir(), 'deyo-clawhub-evidence-'))
+    try {
+      const projection = await projectClawHubSkill(stage, projected)
+      return {
+        commit,
+        tagObject,
+        treeHash,
+        projectionKind: projection.kind,
+        projectionTreeHash: projection.projectionTreeHash,
+        fingerprint: await clawHubFileFingerprint(projected),
+      }
+    }
+    finally {
+      await rm(projected, { recursive: true, force: true })
+    }
+  }
+  finally {
+    await rm(stage, { recursive: true, force: true })
+  }
+}
+
+async function terminalFixForwardPreflight(state) {
+  const frozen = validateTerminalFixForwardState(state)
+  const expectedRemoteBase = frozen.remoteBaseCommit ?? frozen.baseCommit
+  await assertGitPreflight()
+  await assertLocalTooling()
+  if (await readJsonIfPresent(path.join(receiptsDirectory, `v${frozen.targetVersion}.json`))) {
+    throw new Error(`Cannot fix-forward a release with a success receipt for v${frozen.targetVersion}`)
+  }
+
+  const localHead = (await git(['rev-parse', 'HEAD'])).stdout.trim()
+  if (localHead !== frozen.releaseCommit) {
+    throw new Error('Cannot fix-forward because local master no longer matches the failed release commit')
+  }
+  const remoteMaster = await remoteMasterCommit()
+  if (remoteMaster !== expectedRemoteBase) {
+    throw new Error('Cannot fix-forward because origin/master no longer matches the frozen base commit')
+  }
+
+  const tag = await tagEvidence(frozen)
+  const inspect = await inspectVersions()
+  const allocation = allocateTargetVersion(inspect)
+  const nextTarget = allocation.targetVersion
+  if (allocation.baseVersion !== frozen.targetVersion) {
+    throw new Error(`Cannot fix-forward because ClawHub highest version is ${allocation.baseVersion}, not ${frozen.targetVersion}`)
+  }
+  if (inspect.skill?.tags?.latest !== frozen.targetVersion) {
+    throw new Error(`Cannot fix-forward because ClawHub latest is not ${frozen.targetVersion}`)
+  }
+  const exact = await inspectExact(frozen.targetVersion)
+  if (exact?.version?.version !== frozen.targetVersion) {
+    throw new Error(`Cannot fix-forward because ClawHub exact ${frozen.targetVersion} is unavailable`)
+  }
+  const remoteFingerprint = remoteFileFingerprint(exact)
+  if (!compareFingerprints(tag.fingerprint, remoteFingerprint)) {
+    throw new Error(`Cannot fix-forward because ClawHub ${frozen.targetVersion} has a different artifact fingerprint`)
+  }
+  if (
+    Object.hasOwn(frozen, 'clawHubFileFingerprint') &&
+    !compareFingerprints(frozen.clawHubFileFingerprint, tag.fingerprint)
+  ) {
+    throw new Error('Cannot fix-forward because the frozen file fingerprint differs from the tagged artifact')
+  }
+  if (await inspectExact(nextTarget)) {
+    throw new Error(`Cannot fix-forward because next patch ${nextTarget} already exists`)
+  }
+  const verification = await verifyExact(frozen.targetVersion)
+  const terminalSecurity = terminalSecurityEvidence(verification, frozen.targetVersion)
+
+  return {
+    state: frozen,
+    currentSourceSnapshot: await sourceSnapshot(frozen.targetVersion, nextTarget),
+    nextTarget,
+    remoteMaster,
+    tag,
+    terminalSecurity,
+  }
+}
+
+async function confirmFixForward(targetVersion, nextTarget, runtime = {}) {
+  const expected = fixForwardConfirmationPhrase(targetVersion, nextTarget)
+  if (runtime.confirm) {
+    await runtime.confirm(expected)
+    return
+  }
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await prompt.question(`Type "${expected}" to abandon this terminal security release: `)
+    if (answer.trim() !== expected) throw new Error('Fix-forward confirmation did not match')
+  }
+  finally {
+    prompt.close()
+  }
+}
+
+async function archiveTerminalFixForward(originalState, preflight) {
+  const liveState = await readJsonIfPresent(statePath)
+  if (JSON.stringify(liveState) !== JSON.stringify(originalState)) {
+    throw new Error('Release state changed while fix-forward was being confirmed')
+  }
+  await mkdir(abandonedDirectory, { recursive: true, mode: 0o700 })
+  await chmod(abandonedDirectory, 0o700)
+  const archiveDirectory = await mkdtemp(path.join(abandonedDirectory, `v${originalState.targetVersion}-`))
+  await chmod(archiveDirectory, 0o700)
+  const archivedStatePath = path.join(archiveDirectory, 'state.json')
+  const auditPath = path.join(archiveDirectory, 'fix-forward.json')
+  const audit = {
+    schema: 1,
+    kind: 'deyo.terminal-security-fix-forward',
+    state: originalState,
+    abandonedAt: new Date().toISOString(),
+    reason: 'security.status_not_clean',
+    terminalSecurity: preflight.terminalSecurity,
+    currentSourceSnapshot: preflight.currentSourceSnapshot,
+    nextTarget: preflight.nextTarget,
+    remoteMaster: preflight.remoteMaster,
+    tagCommit: preflight.tag.commit,
+    tagObject: preflight.tag.tagObject,
+    tagArchiveTreeHash: preflight.tag.treeHash,
+    artifactFingerprint: preflight.tag.fingerprint,
+  }
+  await atomicPrivateJson(auditPath, audit)
+  await chmod(statePath, 0o600)
+  try {
+    await rename(statePath, archivedStatePath)
+  }
+  catch (error) {
+    await rm(archiveDirectory, { recursive: true, force: true })
+    throw error
+  }
+  await chmod(archivedStatePath, 0o600)
+  return {
+    ...audit,
+    archivePath: path.relative(root, auditPath).split(path.sep).join('/'),
+    archivedStatePath: path.relative(root, archivedStatePath).split(path.sep).join('/'),
+  }
+}
+
+async function fixForwardTerminalRelease(state, runtime = {}) {
+  const initial = await terminalFixForwardPreflight(state)
+  process.stdout.write(
+    `Deyo terminal security fix-forward plan: ${state.targetVersion} -> ${initial.nextTarget}; ` +
+    'the worktree, tags, ClawHub, latest, and origin/master will not be changed.\n',
+  )
+  await confirmFixForward(state.targetVersion, initial.nextTarget, runtime)
+  const final = await terminalFixForwardPreflight(state)
+  if (final.currentSourceSnapshot !== initial.currentSourceSnapshot) {
+    throw new Error('Release source changed while fix-forward was being confirmed')
+  }
+  return await archiveTerminalFixForward(state, final)
+}
+
+async function abandonedFixForwardAudits() {
+  let entries
+  try {
+    entries = await readdir(abandonedDirectory, { withFileTypes: true })
+  }
+  catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
+  const audits = []
+  for (const entry of entries.filter(item => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
+    const directory = path.join(abandonedDirectory, entry.name)
+    const audit = await readJsonIfPresent(path.join(directory, 'fix-forward.json'))
+    const archivedState = await readJsonIfPresent(path.join(directory, 'state.json'))
+    if (!audit && !archivedState) continue
+    if (!audit || !archivedState || JSON.stringify(audit.state) !== JSON.stringify(archivedState)) {
+      throw new Error(`Invalid fix-forward archive ${entry.name}`)
+    }
+    audits.push(audit)
+  }
+  return audits
+}
+
+async function authorizeAbandonedFixForwardBase({ localHead, remoteMaster, allocation, inspect }) {
+  const candidates = []
+  for (const audit of await abandonedFixForwardAudits()) {
+    if (audit?.schema !== 1 || audit?.kind !== 'deyo.terminal-security-fix-forward') continue
+    const failed = validateTerminalFixForwardState(audit.state)
+    const expectedRemoteBase = failed.remoteBaseCommit ?? failed.baseCommit
+    if (
+      failed.releaseCommit === localHead &&
+      expectedRemoteBase === remoteMaster &&
+      failed.targetVersion === allocation.baseVersion &&
+      audit.nextTarget === allocation.targetVersion
+    ) candidates.push({ audit, failed })
+  }
+  if (candidates.length !== 1) {
+    throw new Error('Local master is ahead of origin/master without one matching terminal-security fix-forward archive')
+  }
+  const { audit, failed } = candidates[0]
+  if (
+    audit.reason !== 'security.status_not_clean' ||
+    !/^[a-f0-9]{64}$/.test(audit.currentSourceSnapshot ?? '') ||
+    audit.remoteMaster !== remoteMaster ||
+    audit.tagCommit !== localHead ||
+    audit.tagArchiveTreeHash !== failed.canonicalTreeHash ||
+    !Array.isArray(audit.artifactFingerprint)
+  ) {
+    throw new Error('Terminal-security fix-forward archive is incomplete or inconsistent')
+  }
+  terminalSecurityEvidence({ ok: false, ...audit.terminalSecurity }, failed.targetVersion)
+  const ancestor = await git(['merge-base', '--is-ancestor', remoteMaster, localHead], { allowFailure: true })
+  if (ancestor.code !== 0) throw new Error('Failed release commit is not a fast-forward descendant of origin/master')
+  if (inspect.skill?.tags?.latest !== allocation.baseVersion) {
+    throw new Error(`ClawHub latest is not the abandoned base ${allocation.baseVersion}`)
+  }
+  if (await readJsonIfPresent(path.join(receiptsDirectory, `v${failed.targetVersion}.json`))) {
+    throw new Error(`Abandoned release v${failed.targetVersion} has a success receipt`)
+  }
+  const tag = await tagEvidence(failed)
+  if (!compareFingerprints(audit.artifactFingerprint, tag.fingerprint)) {
+    throw new Error('Abandoned artifact fingerprint differs from the immutable tag archive')
+  }
+  const exact = await inspectExact(failed.targetVersion)
+  if (
+    exact?.version?.version !== failed.targetVersion ||
+    !compareFingerprints(audit.artifactFingerprint, remoteFileFingerprint(exact))
+  ) {
+    throw new Error('Abandoned ClawHub artifact no longer matches the immutable tag archive')
+  }
+  return audit
 }
 
 async function prepareWorkspace(state) {
@@ -610,7 +928,11 @@ async function waitForClawHub(state, stage, runtime = {}) {
       ])
       assertClawHubReady(inspect, verification, state.targetVersion, localFingerprint)
       await isolatedInstallAndVerify(state, localFingerprint)
-      return await advanceState(state, 'clawhub_ready', { clawHubFileFingerprint: localFingerprint })
+      return await advanceState(state, 'clawhub_ready', {
+        clawHubFileFingerprint: localFingerprint,
+        clawHubProjectionKind: runtime.projection?.kind ?? 'unknown',
+        clawHubProjectionTreeHash: runtime.projection?.projectionTreeHash ?? await hashTree(stage),
+      })
     }
     catch (error) {
       if (error instanceof ClawHubConflictError) throw error
@@ -668,6 +990,8 @@ async function completeRelease(state) {
     tag: state.tag,
     canonicalTreeHash: state.canonicalTreeHash,
     clawHubLicense: CLAWHUB_LICENSE,
+    clawHubProjectionKind: state.clawHubProjectionKind,
+    clawHubProjectionTreeHash: state.clawHubProjectionTreeHash,
     releaseNotes: state.releaseNotes,
     releaseNotesPath,
     releaseNotesHash: state.releaseNotesHash,
@@ -689,16 +1013,39 @@ async function executeRelease(initialState, runtime = {}) {
   if (!phaseAtLeast(state, 'committed')) state = await createReleaseCommit(state)
   if (!phaseAtLeast(state, 'tagged')) state = await createAnnotatedTag(state)
 
-  const stage = await archiveTaggedSkill(state.tag)
+  const canonicalStage = await archiveTaggedSkill(state.tag)
+  const stage = await mkdtemp(path.join(os.tmpdir(), 'deyo-clawhub-release-'))
   try {
-    const archiveHash = await hashTree(stage)
+    const archiveHash = await hashTree(canonicalStage)
     if (archiveHash !== state.canonicalTreeHash) throw new Error('Tagged canonical tree differs from the release state')
+    const projection = await projectClawHubSkill(canonicalStage, stage)
+    if (projection.canonicalTreeHash !== state.canonicalTreeHash) {
+      throw new Error('ClawHub projection does not record the frozen canonical tree hash')
+    }
+    if (projection.skillVersion !== state.targetVersion) {
+      throw new Error('ClawHub projection version differs from the frozen release target')
+    }
+    if (phaseAtLeast(state, 'clawhub_ready')) {
+      const projectionFingerprint = await clawHubFileFingerprint(stage)
+      if (projection.kind !== state.clawHubProjectionKind) {
+        throw new Error('Rebuilt ClawHub projection kind differs from the recovery state')
+      }
+      if (projection.projectionTreeHash !== state.clawHubProjectionTreeHash) {
+        throw new Error('Rebuilt ClawHub projection tree hash differs from the recovery state')
+      }
+      if (!compareFingerprints(projectionFingerprint, state.clawHubFileFingerprint)) {
+        throw new Error('Rebuilt ClawHub projection fingerprint differs from the recovery state')
+      }
+    }
     if (!phaseAtLeast(state, 'tag_pushed')) state = await pushTag(state)
-    if (!phaseAtLeast(state, 'clawhub_ready')) state = await waitForClawHub(state, stage, runtime)
+    if (!phaseAtLeast(state, 'clawhub_ready')) {
+      state = await waitForClawHub(state, stage, { ...runtime, projection })
+    }
     if (!phaseAtLeast(state, 'master_pushed')) state = await pushMaster(state)
     return await completeRelease(state)
   }
   finally {
+    await rm(canonicalStage, { recursive: true, force: true })
     await rm(stage, { recursive: true, force: true })
   }
 }
@@ -706,6 +1053,11 @@ async function executeRelease(initialState, runtime = {}) {
 export async function main(argv = process.argv.slice(2), runtime = {}) {
   const options = parseReleaseOptions(argv)
   const existingState = await readJsonIfPresent(statePath)
+  if (options.fixForward) {
+    if (!existingState) throw new Error('No unfinished Deyo Skill release exists to fix-forward')
+    assertFormalEnvironment(runtime)
+    return await fixForwardTerminalRelease(existingState, runtime)
+  }
   if (options.abort) {
     if (!existingState) throw new Error('No unfinished Deyo Skill release exists to abort')
     assertFormalEnvironment(runtime)
@@ -737,6 +1089,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     baseVersion,
     targetVersion,
     baseCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
+    ...(preflight.remoteBaseCommit ? { remoteBaseCommit: preflight.remoteBaseCommit } : {}),
     sourceSnapshot: await sourceSnapshot(baseVersion, targetVersion),
     releaseNotes: preflight.releaseNotes,
     releaseNotesHash: notes.sha256,
@@ -749,7 +1102,13 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().then((receipt) => {
-    if (receipt?.kind === 'deyo.frozen-release-abort') {
+    if (receipt?.kind === 'deyo.terminal-security-fix-forward') {
+      process.stdout.write(
+        `Archived terminal-security Deyo Skill v${receipt.state.targetVersion} release at ${receipt.archivePath}; ` +
+        `the next publish target is v${receipt.nextTarget}.\n`,
+      )
+    }
+    else if (receipt?.kind === 'deyo.frozen-release-abort') {
       process.stdout.write(`Archived frozen Deyo Skill v${receipt.state.targetVersion} release at ${receipt.archivePath}.\n`)
     }
     else if (receipt) process.stdout.write(`Published Deyo Skill v${receipt.skillVersion}.\n`)

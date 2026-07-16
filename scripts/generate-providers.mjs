@@ -189,6 +189,11 @@ export async function generateProviders(outputRoot = root, sourceDirectory = can
         registry: '@casatwy/deyo',
         license: 'MIT-0',
         skillPath: 'deyo',
+        artifactProjection: 'openclaw-v1',
+        projectionSince: '1.0.10',
+        excludedPaths: ['agents/**'],
+        userInvocable: true,
+        disableModelInvocation: true,
       },
     },
   })

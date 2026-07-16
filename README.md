@@ -10,11 +10,11 @@
 
 它覆盖 `deyo` CLI 的安装、API key 鉴权、本地配置优先级、链接/文件命令拼装、稳定正文事件、AI 流式整理与最终 cleaned TXT 交付、结果格式选择、开发环境 base URL 和常见排查规则。
 
-`deyo/SKILL.md` 是唯一人工编辑的 Skill 源。Codex plugin、Claude plugin 和 Gemini extension 的 Skill 副本由脚本生成；`deyo/manifest.json` 是仓库内唯一 Skill 版本源。CLI 与 Skill 独立安装、独立版本和独立更新：Skill 可以要求 CLI `>=0.2.0`，但二者版本不需要相同。
+`deyo/SKILL.md` 是唯一人工编辑的 Skill 源。Codex plugin、Claude plugin 和 Gemini extension 的 Skill 副本由脚本生成；`deyo/manifest.json` 是仓库内唯一 Skill 版本源。CLI 与 Skill 独立安装、独立版本和独立更新：当前待发布 Skill 要求 CLI `>=0.2.1`，但二者版本不需要相同。
 
 ## 适用场景
 
-在以下情况下使用这个 skill：
+只有当前用户明确提出以下请求时才使用这个 skill：
 
 - 用户想安装、配置或升级 `deyo`
 - 用户想通过 `deyo` 转写一个受支持链接
@@ -24,14 +24,16 @@
 - 用户想确认 `--source`、`--file`、`--mime-type`、`--format`、`--progress-format`、`--stream-transcript`、`-O`、stdout 输出或 AI 对话里的流式整理行为
 - 用户想排查上传、媒体检查、字幕直出、分钟余额或不支持来源分支
 
+单纯提及 Deyo、上下文里的附件、当前目录、编辑器选择、剪贴板或其他环境信息都不能触发。转写请求必须写明一个 URL 或一个精确本地文件路径；不接受目录、glob、stdin、批量或隐式附件。不得从排障或转写请求推断登录、安装、升级、保存 API key、读取其他文件或修改配置的授权。
+
 ## 核心规则
 
 - 优先使用系统里已安装的 `deyo` 命令。
-- 如果 `deyo` 不存在，或 `deyo --help` 里还没有 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`，先安装或升级到 `@casatwy/deyo@^0.2.0`。
+- 如果 `deyo` 不存在、版本低于 `0.2.1`，或 `deyo --help` 里还没有 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`，先安装或升级到 `@casatwy/deyo@^0.2.0`。
 - 默认使用生产服务和 CLI 默认配置；只有用户明确要求本地/开发环境时，才传 `--base-url http://deyo.mac-studio`。
 - 不要虚构 API key；如果用户没有提供，要求用户先到 `https://deyo.miaobi.fun/me/api-keys` 创建。
-- 用户提供 API key 后，用 `deyo auth login --api-key '...'` 保存到本地，方便后续复用。
-- 除非用户明确要求其他结果语言，否则默认追加 `--language zh`。
+- 只有用户明确要求保存 API key 时，才用 `deyo auth login --api-key '...'` 写入本地配置。
+- 默认省略 `--language`，由服务端自动检测；只有用户明确选择支持语言时才追加 `--language <language>`，不得从对话语言、标题或 locale 推断。
 - 链接转写和本地文件上传转写都需要 API key 鉴权；完整转写任务会扣减账号分钟余额。
 - YouTube 如果命中可直接使用的字幕，会直接返回字幕结果，不进入长时间转写，也不扣分钟。
 - AI 代跑上传任务或可能持续一段时间的转写任务时，默认追加 `--progress-format jsonl`。
@@ -82,7 +84,7 @@ Base URL 读取优先级：
 
 ```bash
 deyo auth login --api-key 'deyo_sk_xxx' --base-url http://deyo.mac-studio
-deyo --base-url http://deyo.mac-studio --language zh -O ./tmp/out.txt 'https://www.youtube.com/watch?v=xxxx'
+deyo --base-url http://deyo.mac-studio -O ./tmp/out.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 ## 命令速查
@@ -146,7 +148,7 @@ deyo [--api-key <key>] [--source <name>] [--file <path>] [--mime-type <type>] [-
 这仍是 agent 能力，不是 CLI 内置能力。普通 `text` 整理模式必须让 CLI 把最终 Whisper 原稿写到 `0700` 临时目录中的 `0600` raw 文件，不能把用户目标 `.txt` 直接交给 CLI：
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript -O "$raw_path" '<url>'
+deyo --format text --progress-format jsonl --stream-transcript -O "$raw_path" '<url>'
 ```
 
 AI 只消费稳定正文事件，目标约 600 个 Unicode code point，在 400–920 之间优先按自然段、句末、分句和空白边界切块；终态尾段可以短于 400，不能超过 920。保留前后文只用于跨块标点、专名和术语一致，模型只返回当前块。
@@ -218,11 +220,11 @@ YouTube 字幕直出的 `text` 同样整理后再展示；SRT/VTT 保持原样�
 ## 推荐工作流
 
 1. 先确认机器上是否已安装 `deyo`。
-2. 先用 `deyo --version` 和 `deyo --help` 确认 CLI 至少为 `0.2.0`，并支持 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`、`json` 和 `verbose_json`。
+2. 先用 `deyo --version` 和 `deyo --help` 确认 CLI 至少为 `0.2.1`，并支持省略语言自动检测、`--stream-transcript`、`--progress-format`、`--file`、`--mime-type`、`json` 和 `verbose_json`。
 3. 确认目标是链接还是本地文件，以及输出格式和输出路径。
-4. 如果本地尚未登录，向用户索取 API key 并执行 `deyo auth login --api-key '...'`。
+4. 如果本地尚未登录，说明需要 API key；只有用户明确要求保存并提供 key 时才执行 `deyo auth login --api-key '...'`。
 5. 仅在用户明确要求本地/开发环境时追加 `--base-url http://deyo.mac-studio`。
-6. 除非用户明确指定其他语言，否则追加 `--language zh`。
+6. 默认省略 `--language` 自动检测；只有用户明确指定支持语言时才追加 `--language <language>`。
 7. 仅在强制指定平台有帮助时才加 `--source`；本地文件不要传非 `upload` 的 `--source`。
 8. 本地文件任务可使用位置参数或 `--file`；仅在需要时加 `--mime-type`。
 9. 普通 `text` 整理稿使用权限受限临时 raw，并追加 `--format text --progress-format jsonl --stream-transcript`；raw/SRT/VTT/JSON/verbose JSON 不追加正文流。
@@ -248,85 +250,85 @@ deyo auth login --api-key 'deyo_sk_xxx'
 输出中文 Whisper 原稿（仅限用户明确要求 raw）：
 
 ```bash
-deyo --language zh -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
+deyo -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 AI 流式整理模式（`$raw_path` 必须位于权限受限的临时目录）：
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript -O "$raw_path" 'https://www.youtube.com/watch?v=xxxx'
+deyo --format text --progress-format jsonl --stream-transcript -O "$raw_path" 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 转写本地文件并保存 Whisper 原稿（仅限 raw）：
 
 ```bash
-deyo --language zh -O ./tmp/audio.txt ./audio.mp3
+deyo -O ./tmp/audio.txt ./audio.mp3
 ```
 
 显式指定本地文件和 MIME type：
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript --file ./audio.mp3 --mime-type audio/mpeg -O "$raw_path"
+deyo --format text --progress-format jsonl --stream-transcript --file ./audio.mp3 --mime-type audio/mpeg -O "$raw_path"
 ```
 
 强制使用 YouTube 源并导出 SRT：
 
 ```bash
-deyo --language zh --source youtube --format srt -O ./tmp/out.srt 'https://youtu.be/xxxx'
+deyo --source youtube --format srt -O ./tmp/out.srt 'https://youtu.be/xxxx'
 ```
 
 导出 VTT：
 
 ```bash
-deyo --language zh --format vtt -O ./tmp/out.vtt 'https://www.youtube.com/watch?v=xxxx'
+deyo --format vtt -O ./tmp/out.vtt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 直接从 stdout 读取 JSON：
 
 ```bash
-deyo --language zh --format json 'https://www.bilibili.com/video/BVxxxx'
+deyo --format json 'https://www.bilibili.com/video/BVxxxx'
 ```
 
 读取更完整的 JSON：
 
 ```bash
-deyo --language zh --format verbose_json 'https://www.bilibili.com/video/BVxxxx'
+deyo --format verbose_json 'https://www.bilibili.com/video/BVxxxx'
 ```
 
 使用临时 API key：
 
 ```bash
-deyo --api-key 'deyo_sk_other' --language zh 'https://www.bilibili.com/video/BVxxxx'
+deyo --api-key 'deyo_sk_other' 'https://www.bilibili.com/video/BVxxxx'
 ```
 
 明确使用开发环境并保留 raw（仅在用户要求开发环境时）：
 
 ```bash
-deyo --base-url http://deyo.mac-studio --language zh -O ./tmp/dev.txt 'https://www.youtube.com/watch?v=xxxx'
+deyo --base-url http://deyo.mac-studio -O ./tmp/dev.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 处理喜马拉雅单集：
 
 ```bash
-deyo --language zh -O ./tmp/ximalaya.txt 'https://www.ximalaya.com/sound/963656969'
+deyo -O ./tmp/ximalaya.txt 'https://www.ximalaya.com/sound/963656969'
 ```
 
 强制使用 Twitter/X 源：
 
 ```bash
-deyo --language zh --source twitter -O ./tmp/tweet.txt 'https://x.com/historyinmemes/status/1790637656616943991'
+deyo --source twitter -O ./tmp/tweet.txt 'https://x.com/historyinmemes/status/1790637656616943991'
 ```
 
 B 站 player 嵌入链接必须带 `bvid`：
 
 ```bash
-deyo --language zh -O ./tmp/bilibili.txt 'https://player.bilibili.com/player.html?bvid=BVxxxx&page=2&cid=123456'
+deyo -O ./tmp/bilibili.txt 'https://player.bilibili.com/player.html?bvid=BVxxxx&page=2&cid=123456'
 ```
 
 B 站 App 分享视频链接可以直接传入；CLI 会提交原始 App URL，由 Whisper 解析 `h5awaken.open_app_url`、`h5awaken` base64 中的 `open_app_url` 或路径本身的 BV 号：
 
 ```bash
-deyo --language zh -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
+deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 ```
 
 ## 来源边界
@@ -353,7 +355,7 @@ deyo --language zh -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - 上传后的文件 SHA-256 校验失败：重新选择文件再上传。
 - 任务创建后中断本地 CLI，不等于取消服务端任务；CLI 会提示“服务端转写仍在继续”或“服务端正在处理上传”。
 - 如果用户反馈没有进度更新，先确认 `deyo --help` 是否已经包含 `--progress-format`；如果没有，先升级 CLI。
-- 如果没有稳定正文事件，确认 `deyo --version` 至少是 `0.2.0`，且命令同时使用了最终 `text`、`--progress-format jsonl` 和 `--stream-transcript`。
+- 如果没有稳定正文事件，确认 `deyo --version` 至少是 `0.2.1`，且命令同时使用了最终 `text`、`--progress-format jsonl` 和 `--stream-transcript`。
 - 如果 delta offset、字符数、sequence 或 completed SHA-256 不一致，停止信任实时正文，明确告知实时整理不可用，继续等待终态 raw；不要取消服务端任务。
 - 如果中途丢失实时进度，留意 CLI 是否输出了“事件流中断，回退到轮询状态”的提示。
 - 如果任务创建后很快结束，优先判断是否是直接返回字幕的场景，而不是长时间转写链路。
@@ -414,18 +416,18 @@ deyo skill install --platform openclaw
 deyo skill status --platform openclaw
 ```
 
-安装后，执行一次 API key 登录：
+只有用户明确要求保存 API key 时，才执行登录：
 
 ```bash
 deyo auth login --api-key 'deyo_sk_xxx'
 ```
 
-默认安装目标是 owner-qualified 的 `@casatwy/deyo --global`；只有明确需要当前 OpenClaw workspace 隔离时，才使用 `deyo skill install --platform openclaw --scope workspace`。安装和更新只处理当前生效 scope，不会使用 `--all` 或 `--force`。不创建 Cron；每次调用 Skill 时最多每 24 小时通过 OpenClaw 原生 `verify` / `update` 检查一次，20 秒超时且只有 security verification 为 `pass/clean` 才更新。失败继续使用旧版；更新成功后重新调用以加载新版。
+默认安装目标是 owner-qualified 的 `@casatwy/deyo --global`；只有明确需要当前 OpenClaw workspace 隔离时，才使用 `deyo skill install --platform openclaw --scope workspace`。OpenClaw 版本只允许用户通过显式 `/deyo` 调用，不允许模型隐式触发。安装和更新只处理当前生效 scope，不会使用 `--all`、`--force`、`--force-install` 或风险确认绕过。不创建 Cron；每次显式调用时最多每 24 小时先用 `--tag latest` 验证 owner-qualified 候选版本，再通过 OpenClaw 原生单项 `update` 更新，共享 20 秒超时且只有 identity、稳定版本和 security verification 都通过才继续。更新前后通过 `.clawhub/origin.json` 比较版本，不解析本地化命令输出。失败继续使用旧版；版本变化或结果不确定时停止本轮并要求重新调用。设置 `DEYO_OPENCLAW_AUTO_UPDATE=0` 可在创建 state 或启动子进程前关闭检查。
 
 安装完成后，就可以在 OpenClaw 对话里直接提需求，例如：
 
 ```text
-用 deyo 把这个 YouTube 链接转成中文 SRT
+/deyo 把这个 YouTube 链接转成中文 SRT
 ```
 
 ## 在 Gemini CLI 中使用
@@ -478,3 +480,15 @@ make abort
 该命令与普通 `publish` / `RESUME=1` 相互独立。它会重新在线核对官方 Git 分支、upstream、origin、local/remote master、local/remote 目标 tag、ClawHub 完整不可变版本历史与精确目标版本；CI、非交互终端、非 `frozen` state 或任何冲突都会硬停止。确认短语固定为 `abort deyo v<目标版本>`。
 
 中止不会修改工作树、Git 远端或 ClawHub。Active state 会通过同文件系统原子 rename 归档到私有的 `.git/deyo-release/aborted/`，同时记录原 state、中止时间、原因和当前 source snapshot。不要手工删除 state，也不要修改 frozen snapshot 后尝试 `RESUME=1`。中止成功后，普通 `make publish` 会重新枚举 ClawHub；如果最高不可变版本和目标占用状态没有变化，会重新冻结同一个 patch 版本。
+
+## 维护者：terminal security fix-forward
+
+只有发布已精确停在 `tag_pushed`，ClawHub 不可变精确版本存在且 `latest` 指向该版本、artifact 与 tag archive 完全一致、远端 `master` 仍停在发布前基线，并且 ClawHub verification 的唯一终态失败是 `security.status_not_clean` 时，才可运行：
+
+```bash
+make fix-forward
+```
+
+该命令不修复、覆盖或删除已发布版本，也不移动 tag、`latest` 或远端 `master`。它在确认前后分别在线核对官方 origin/upstream、local/remote master、local/remote tag、完整 ClawHub 版本历史、精确版本与下一 patch、tag archive fingerprint、terminal verification verdict，并拒绝 CI、非交互终端、成功 receipt、非 `tag_pushed` state、pending/review、额外失败原因或任何漂移。确认短语固定为 `fix-forward deyo v<失败版本> to v<下一 patch>`。
+
+成功后，active state 会通过同文件系统原子 rename 归档到权限受限的 `.git/deyo-release/abandoned/`；audit 保存原 state、时间、`security.status_not_clean` verdict/findings、当前 source snapshot、tag/tree/artifact fingerprint 与下一目标。命令本身不修改工作树或外部状态。维护者随后修复 canonical 内容并执行普通 `make publish`；发布器只有在 abandoned audit 和所有不可变证据仍一致时，才允许本地 `master` 位于失败 release commit 而远端 `master` 仍在旧基线，并自动从 ClawHub 最高失败版本分配下一 patch。下一版本通过 pass/clean 前绝不推进远端 `master`；激活时历史会同时包含失败 commit 和修复 commit，tip 必须是通过验证的新版本。

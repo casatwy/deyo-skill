@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
   short_description: "用 deyo CLI 转写链接或本地音视频，流式整理正文并安全交付 TXT"
-  default_prompt: "Use the deyo skill to transcribe a link or one local media file. For non-raw text, require CLI 0.2.0+, stream numbered cleaned paragraphs, handle resets, rebuild from private final raw, and publish with the bundled atomic no-clobber helper. Preserve SRT/VTT/JSON and explicit raw exactly."
+  default_prompt: "Use the deyo skill only for my explicit request to transcribe this one URL or exact local media path. For non-raw text, stream cleaned paragraphs, rebuild from private final raw, and publish with the atomic no-clobber helper. Preserve SRT/VTT/JSON and explicit raw exactly."
 
 # Gemini CLI 通过官方 Git extension 加载 skills/deyo，并在安装时开启 auto-update。
 gemini_cli:
@@ -13,4 +13,6 @@ gemini_cli:
     - "不固定 --ref，不主动添加 --consent；更新后重启 Gemini CLI。"
     - "统一安装入口只支持 user scope；如需限制某个 workspace，应使用 Gemini Extension 自身的 enable / disable 配置，不要改用旧的 Skill 子目录安装。"
     - "运行 deyo 前必须具备 API key；普通情况使用默认生产服务，只有用户明确要求本地/开发环境时才传 --base-url http://deyo.mac-studio。"
-    - "整理纯文本时要求 deyo CLI 0.2.0+，并使用 --stream-transcript 与 --progress-format jsonl；最终文件必须从权限受限的终态 raw 重新完整整理。"
+    - "只有当前用户明确要求转写一个写明的 URL / 精确本地文件，或明确要求 Deyo install / status / 排障时才调用；不得从隐式附件、目录、glob、stdin、批量或上下文推断授权。"
+    - "默认省略 --language 以自动检测；只有用户明确选择支持语言时才传 --language <language>。"
+    - "要求 deyo CLI 0.2.1+；省略 --language 时必须不发送 language 字段并使用自动检测，整理纯文本时使用 --stream-transcript 与 --progress-format jsonl；最终文件必须从权限受限的终态 raw 重新完整整理。"

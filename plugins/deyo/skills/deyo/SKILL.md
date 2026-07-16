@@ -1,11 +1,19 @@
 ---
 name: deyo
-description: Use this skill when the user wants to install, configure, run, automate, or troubleshoot the published `deyo` transcription CLI for link transcription, single local audio/video upload transcription, API key login, output formats, progress reporting, live AI-cleaned plain-text display, safe final cleaned TXT delivery, development base URLs, or Claude/Codex/Gemini/OpenClaw agent workflows.
+description: Use only when the current user explicitly asks to use Deyo to transcribe one provided URL or one exact local audio/video file path, or explicitly asks for Deyo install, status, or troubleshooting. Do not trigger from a mere Deyo mention, ambient context, an implicit attachment, directory browsing, a glob, stdin, a batch request, or inferred permission to log in, install software, or read files.
 ---
 
 # Deyo
 
 Use the installed `deyo` CLI for Deyo transcription tasks instead of the web UI.
+
+## Explicit Authorization Boundary
+
+- Act only on the current user's explicit request to transcribe exactly one URL written in the request or exactly one local file path the user identified, or on an explicit Deyo install, status, or troubleshooting request.
+- Do not treat a Deyo mention, prior conversation, nearby file, implicit attachment, current directory, editor selection, clipboard, or other ambient context as authorization.
+- Never browse or scan a directory to choose an input. Reject directories, globs, stdin, multiple inputs, batch queues, and inferred attachments.
+- Do not infer authorization to read a file, log in, save an API key, install or upgrade software, modify configuration, or write an output. Require the current request to authorize each action needed; otherwise ask first.
+- Keep `deyo skill status` read-only and offline. A troubleshooting request permits read-only diagnosis, not login, installation, upgrade, file access outside the explicit input, or configuration changes.
 
 ## OpenClaw Invocation Update Check
 
@@ -16,16 +24,17 @@ node '{baseDir}/scripts/openclaw-auto-update.mjs' --scope global
 ```
 
 - Use `--scope workspace` only when this exact active skill was intentionally installed in the current OpenClaw workspace instead of the default global managed scope.
-- The check uses only `openclaw skills verify @casatwy/deyo` and `openclaw skills update @casatwy/deyo`; never add `--all`, `--force`, `--force-install`, or a risk-acknowledgement bypass.
-- The check attempts at most once every 24 hours, has one 20-second deadline, requires ClawHub verification to be `pass` and `clean`, and keeps all child output away from the transcription stdout and output files.
+- Set `DEYO_OPENCLAW_AUTO_UPDATE=0` to disable the invocation-time check. It returns before creating update state or starting a child process.
+- The check verifies the owner-qualified `@casatwy/deyo` candidate selected by `--tag latest`, then uses only `openclaw skills update @casatwy/deyo`; never add `--all`, `--force`, `--force-install`, or a risk-acknowledgement bypass.
+- The check attempts at most once every 24 hours, has one shared 20-second deadline, requires the exact candidate and ClawHub verification to be `pass` and `clean`, compares managed `.clawhub/origin.json` before and after updating, and keeps all child output away from the transcription stdout and output files.
 - Exit code `0` means continue normally, including when the check is not due, busy, already current, or failed. A failed check must not block the user's existing installed skill.
-- Exit code `10` means the installed skill changed. Stop this turn before starting transcription and ask the user to invoke Deyo again so OpenClaw loads the new version.
+- Exit code `10` means the installed skill changed or the update result is indeterminate. Stop this turn before starting transcription and ask the user to invoke Deyo again so OpenClaw can load or re-check the active version.
 - Do not create Cron jobs, background services, launch agents, or persistent timers for updates.
 
 ## Install And Discovery
 
 - Prefer the installed `deyo` command. Check with `command -v deyo`, then inspect `deyo --help` and `deyo --version`.
-- For live cleaned plain-text delivery, require CLI `0.2.0` or newer and verify that help lists `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, and `verbose_json`.
+- Require CLI `0.2.1` or newer so omitting `--language` sends no language field and requests automatic detection. Also verify that help lists `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, and `verbose_json`.
 - If the command or required capability is missing, install or upgrade the published CLI:
 
 ```bash
@@ -50,6 +59,12 @@ npm install -g @casatwy/deyo@^0.2.0
 - Support one ordinary local audio/video file as source `upload`. Accept `deyo ./audio.mp3`, `deyo --file ./audio.mp3`, or `deyo -- ./audio.mp3`.
 - Add `--mime-type audio/*` or `--mime-type video/*` only when automatic detection is missing or wrong.
 - Do not pass directories, globs, stdin, special files, multiple files, batch queues, or resumable-upload expectations.
+
+## Language Selection
+
+- Omit `--language` unless the current user explicitly selects a supported transcription language. Omission requests automatic language detection.
+- When the user explicitly selects a supported value, append `--language '<language>'`. Do not infer a language from the conversation language, source title, locale, or prior task.
+- If the requested language is unsupported or ambiguous, ask the user to choose a supported value before adding the flag.
 
 ## Choose The Delivery Mode
 
@@ -76,7 +91,7 @@ install -m 600 /dev/null "$raw_path"
 Run the CLI with explicit compatible flags and write the authoritative Whisper result only to that raw path:
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript -O "$raw_path" '<url>'
+deyo --format text --progress-format jsonl --stream-transcript -O "$raw_path" '<url>'
 ```
 
 For a local file, keep the same output/progress flags and add `--file` plus an optional `--mime-type`.
@@ -171,12 +186,14 @@ Choose a safe `.txt` destination:
 For explicit raw text, SRT, VTT, JSON, or verbose JSON, omit `--stream-transcript` and preserve the result exactly:
 
 ```bash
-deyo --language zh --format text -O ./tmp/raw.txt '<url>'
-deyo --language zh --format srt -O ./tmp/out.srt '<url>'
-deyo --language zh --format vtt -O ./tmp/out.vtt '<url>'
-deyo --language zh --format json '<url>'
-deyo --language zh --format verbose_json '<url>'
+deyo --format text -O ./tmp/raw.txt '<url>'
+deyo --format srt -O ./tmp/out.srt '<url>'
+deyo --format vtt -O ./tmp/out.vtt '<url>'
+deyo --format json '<url>'
+deyo --format verbose_json '<url>'
 ```
+
+Add `--language '<language>'` to any example only after the current user explicitly selects that supported language.
 
 Progress/status remains on stderr. Upload JSON is redacted by the CLI/server so sensitive upload fields appear as `upload:file`.
 

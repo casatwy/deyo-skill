@@ -1,7 +1,7 @@
 interface:
   display_name: "Deyo"
   short_description: "用 deyo CLI 转写链接或本地音视频，流式整理正文并安全交付 TXT"
-  default_prompt: "Use the deyo skill to transcribe a link or one local media file. For non-raw text, require CLI 0.2.0+, stream numbered cleaned paragraphs, handle resets, rebuild from private final raw, and publish with the bundled atomic no-clobber helper. Preserve SRT/VTT/JSON and explicit raw exactly."
+  default_prompt: "Use the deyo skill only for my explicit request to transcribe this one URL or exact local media path. For non-raw text, stream cleaned paragraphs, rebuild from private final raw, and publish with the atomic no-clobber helper. Preserve SRT/VTT/JSON and explicit raw exactly."
 
 # Claude 通过 Deyo 官方 Git marketplace 安装 plugin，并为 marketplace 开启自动更新。
 # legacy ~/.claude/skills 只允许在官方历史哈希完全匹配时迁移。
@@ -12,10 +12,9 @@ claude_code:
   plugin: "deyo@deyo-official"
   auto_update: true
   invocation:
-    # Claude Code 主要靠 SKILL.md 的 frontmatter description 触发，
-    # 用户也可以通过 /deyo 直接显式调用。
+    # 收窄到用户显式调用，避免仅提及 Deyo、环境中的附件或文件触发。
     slash_command: "/deyo"
-    implicit: true
+    implicit: false
   required_tools:
     - Bash
   notes:
@@ -23,9 +22,11 @@ claude_code:
     - "推荐安装方式：deyo skill install --platform claude；它合并官方 Git marketplace、安装 deyo@deyo-official 并设置 autoUpdate: true。"
     - "同名 marketplace 异源时拒绝覆盖；legacy 目录只有官方历史哈希完全匹配时才允许事务式迁移。"
     - "更新后执行 /reload-plugins 或开启新会话。"
+    - "只有当前用户明确要求转写一个写明的 URL / 精确本地文件，或明确要求 Deyo install / status / 排障时才调用；不得从隐式附件、目录、glob、stdin、批量或上下文推断授权。"
+    - "默认省略 --language 以自动检测；只有用户明确选择支持语言时才传 --language <language>。"
     - "如果 claude plugin install 失败，保留原始错误并停止，不要修改全局 git、SSH 或 npm 配置。"
-    - "整理纯文本时要求 deyo CLI 0.2.0+，并通过 --stream-transcript 与 --progress-format jsonl 消费稳定正文事件。"
+    - "要求 deyo CLI 0.2.1+；省略 --language 时必须不发送 language 字段并使用自动检测，整理纯文本时通过 --stream-transcript 与 --progress-format jsonl 消费稳定正文事件。"
     - "CLI 只写权限受限的临时 Whisper 原稿；Claude 依据终态原稿重新整理，并使用 bundled helper 原子 no-clobber 发布 cleaned TXT；并发占位或悬空 symlink 不得覆盖。"
 
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false

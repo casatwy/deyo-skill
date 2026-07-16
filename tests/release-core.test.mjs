@@ -14,6 +14,7 @@ import {
   ClawHubPendingError,
   confirmationPhrase,
   enumerateImmutableVersions,
+  fixForwardConfirmationPhrase,
   hashTree,
   incrementPatch,
   reconcileResumeGitState,
@@ -23,6 +24,7 @@ import {
   validateReleaseNotes,
   validateFrozenAbortState,
   validateReleaseState,
+  validateTerminalFixForwardState,
 } from '../scripts/release-core.mjs'
 import { isCiEnvironment, parseReleaseOptions } from '../scripts/release.mjs'
 
@@ -82,17 +84,41 @@ test('target reservation and resume state never allocate another patch', () => {
 })
 
 test('release options forbid overrides and incompatible modes', () => {
-  assert.deepEqual(parseReleaseOptions([]), { abort: false, dryRun: false, resume: false })
-  assert.deepEqual(parseReleaseOptions(['--dry-run']), { abort: false, dryRun: true, resume: false })
-  assert.deepEqual(parseReleaseOptions(['--resume']), { abort: false, dryRun: false, resume: true })
-  assert.deepEqual(parseReleaseOptions(['--abort']), { abort: true, dryRun: false, resume: false })
+  assert.deepEqual(parseReleaseOptions([]), { abort: false, dryRun: false, fixForward: false, resume: false })
+  assert.deepEqual(parseReleaseOptions(['--dry-run']), { abort: false, dryRun: true, fixForward: false, resume: false })
+  assert.deepEqual(parseReleaseOptions(['--resume']), { abort: false, dryRun: false, fixForward: false, resume: true })
+  assert.deepEqual(parseReleaseOptions(['--abort']), { abort: true, dryRun: false, fixForward: false, resume: false })
+  assert.deepEqual(parseReleaseOptions(['--fix-forward']), { abort: false, dryRun: false, fixForward: true, resume: false })
   assert.throws(() => parseReleaseOptions(['--dry-run', '--resume']), /cannot be combined/)
   assert.throws(() => parseReleaseOptions(['--abort', '--resume']), /cannot be combined/)
+  assert.throws(() => parseReleaseOptions(['--fix-forward', '--resume']), /cannot be combined/)
   assert.throws(() => parseReleaseOptions(['--version', '1.2.3']), /Unknown release option/)
   assert.equal(isCiEnvironment({ CI: 'true' }), true)
   assert.equal(isCiEnvironment({ GITHUB_ACTIONS: '1' }), true)
   assert.equal(isCiEnvironment({ CI: 'false' }), false)
   assert.equal(isCiEnvironment({}), false)
+})
+
+test('terminal fix-forward validation is limited to a complete tag_pushed state', () => {
+  const notes = 'notes\n'
+  const state = {
+    schema: 1,
+    phase: 'tag_pushed',
+    baseVersion: '1.0.8',
+    targetVersion: '1.0.9',
+    baseCommit: 'b'.repeat(40),
+    sourceSnapshot: 'a'.repeat(64),
+    canonicalTreeHash: 'c'.repeat(64),
+    releaseCommit: 'd'.repeat(40),
+    tag: 'v1.0.9',
+    releaseNotes: notes,
+    releaseNotesHash: sha256(notes),
+  }
+  assert.equal(validateTerminalFixForwardState(state), state)
+  assert.equal(fixForwardConfirmationPhrase('1.0.9', '1.0.10'), 'fix-forward deyo v1.0.9 to v1.0.10')
+  assert.throws(() => fixForwardConfirmationPhrase('1.0.9', '1.0.11'), /next patch/)
+  assert.throws(() => validateTerminalFixForwardState({ ...state, phase: 'tagged' }), /tag_pushed/)
+  assert.throws(() => validateTerminalFixForwardState({ ...state, clawHubFileFingerprint: [{}] }), /invalid ClawHub/)
 })
 
 test('frozen abort validation rejects later phases and post-frozen fields', () => {
@@ -175,6 +201,52 @@ test('resume recovers only exact commit and master-push crash windows', () => {
     localHead: releaseCommit,
     remoteMaster: 'f'.repeat(40),
   }), /origin\/master changed/)
+
+  const fixForwardPrepared = {
+    ...prepared,
+    baseVersion: '1.0.9',
+    targetVersion: '1.0.10',
+    baseCommit: releaseCommit,
+    remoteBaseCommit: prepared.baseCommit,
+  }
+  const fixForwardCommit = 'e'.repeat(40)
+  const recoveredFixForward = reconcileResumeGitState(fixForwardPrepared, {
+    localHead: fixForwardCommit,
+    localHeadParent: releaseCommit,
+    localHeadSubject: 'release(skill): v1.0.10',
+    remoteMaster: prepared.baseCommit,
+  })
+  assert.equal(recoveredFixForward.phase, 'committed')
+  assert.equal(recoveredFixForward.releaseCommit, fixForwardCommit)
+})
+
+test('1.0.10 ClawHub-ready state records projection evidence separately from canonical hash', () => {
+  const notes = 'notes\n'
+  const ready = {
+    schema: 1,
+    phase: 'clawhub_ready',
+    baseVersion: '1.0.9',
+    targetVersion: '1.0.10',
+    baseCommit: 'b'.repeat(40),
+    sourceSnapshot: 'a'.repeat(64),
+    canonicalTreeHash: 'c'.repeat(64),
+    releaseCommit: 'd'.repeat(40),
+    tag: 'v1.0.10',
+    releaseNotes: notes,
+    releaseNotesHash: sha256(notes),
+    clawHubFileFingerprint: [{ path: 'SKILL.md', size: 1, sha256: 'e'.repeat(64) }],
+    clawHubProjectionKind: 'openclaw-v1',
+    clawHubProjectionTreeHash: 'f'.repeat(64),
+  }
+  assert.equal(validateReleaseState(ready), ready)
+  assert.throws(
+    () => validateReleaseState({ ...ready, clawHubProjectionKind: undefined }),
+    /projection kind/,
+  )
+  assert.throws(
+    () => validateReleaseState({ ...ready, clawHubProjectionTreeHash: undefined }),
+    /projection tree hash/,
+  )
 })
 
 test('tree hashing includes modes, symlinks, paths, and contents', async () => {

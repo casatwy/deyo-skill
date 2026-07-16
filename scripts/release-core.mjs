@@ -120,6 +120,15 @@ export function abortConfirmationPhrase(targetVersion) {
   return `abort deyo v${targetVersion}`
 }
 
+export function fixForwardConfirmationPhrase(targetVersion, nextTarget) {
+  assertStableSemver(targetVersion, 'target version')
+  assertStableSemver(nextTarget, 'next target version')
+  if (incrementPatch(targetVersion) !== nextTarget) {
+    throw new Error('Fix-forward target must be the next patch')
+  }
+  return `fix-forward deyo v${targetVersion} to v${nextTarget}`
+}
+
 export function phaseAtLeast(state, phase) {
   const currentIndex = RELEASE_PHASES.indexOf(state?.phase)
   const targetIndex = RELEASE_PHASES.indexOf(phase)
@@ -137,6 +146,9 @@ export function validateReleaseState(state) {
   if (!RELEASE_PHASES.includes(state.phase)) throw new Error(`Invalid recovery phase ${state.phase}`)
   if (!/^[a-f0-9]{64}$/.test(state.sourceSnapshot)) throw new Error('Invalid source snapshot hash')
   if (!/^[a-f0-9]{40}$/.test(state.baseCommit)) throw new Error('Invalid frozen base commit')
+  if (Object.hasOwn(state, 'remoteBaseCommit') && !/^[a-f0-9]{40}$/.test(state.remoteBaseCommit)) {
+    throw new Error('Invalid frozen remote base commit')
+  }
   if (!/^[a-f0-9]{64}$/.test(state.releaseNotesHash)) throw new Error('Invalid release notes hash')
   if (typeof state.releaseNotes !== 'string' || sha256(state.releaseNotes) !== state.releaseNotesHash) {
     throw new Error('Recovery state release notes do not match their frozen hash')
@@ -169,6 +181,16 @@ export function validateReleaseState(state) {
         throw new Error('ClawHub-ready state contains an invalid file fingerprint')
       }
     }
+    const requiresProjectionMetadata = compareSemver(state.targetVersion, '1.0.10') >= 0
+    if (requiresProjectionMetadata && state.clawHubProjectionKind !== 'openclaw-v1') {
+      throw new Error('ClawHub-ready state is missing its OpenClaw projection kind')
+    }
+    if (
+      (requiresProjectionMetadata || Object.hasOwn(state, 'clawHubProjectionTreeHash'))
+      && !/^[a-f0-9]{64}$/.test(state.clawHubProjectionTreeHash ?? '')
+    ) {
+      throw new Error('ClawHub-ready state is missing its projection tree hash')
+    }
   }
   return state
 }
@@ -187,6 +209,42 @@ export function validateFrozenAbortState(state) {
   const present = postFrozenFields.filter(field => Object.hasOwn(validated, field))
   if (present.length > 0) {
     throw new Error(`Frozen release contains post-frozen state and cannot be aborted: ${present.join(', ')}`)
+  }
+  return validated
+}
+
+export function validateTerminalFixForwardState(state) {
+  const validated = validateReleaseState(state)
+  if (validated.phase !== 'tag_pushed') {
+    throw new Error(`Only a tag_pushed release can be fix-forwarded; current phase is ${validated.phase}`)
+  }
+  if (!/^[a-f0-9]{64}$/.test(validated.canonicalTreeHash)) {
+    throw new Error('Fix-forward state is missing the canonical tree hash')
+  }
+  if (!/^[a-f0-9]{40}$/.test(validated.releaseCommit)) {
+    throw new Error('Fix-forward state is missing the release commit')
+  }
+  if (validated.tag !== `v${validated.targetVersion}`) {
+    throw new Error('Fix-forward state has an invalid immutable tag')
+  }
+  if (Object.hasOwn(validated, 'clawHubFileFingerprint')) {
+    if (!Array.isArray(validated.clawHubFileFingerprint)) {
+      throw new Error('Fix-forward state has an invalid ClawHub file fingerprint')
+    }
+    for (const entry of validated.clawHubFileFingerprint) {
+      if (
+        !entry ||
+        typeof entry.path !== 'string' ||
+        entry.path.length === 0 ||
+        entry.path.startsWith('/') ||
+        entry.path.includes('..') ||
+        !Number.isSafeInteger(entry.size) ||
+        entry.size < 0 ||
+        !/^[a-f0-9]{64}$/.test(entry.sha256)
+      ) {
+        throw new Error('Fix-forward state has an invalid ClawHub file fingerprint')
+      }
+    }
   }
   return validated
 }
@@ -222,6 +280,7 @@ export function validateRemoteConfiguration(remotes, originUrl) {
 export function reconcileResumeGitState(state, context) {
   const recovered = { ...validateReleaseState(state) }
   const expectedSubject = `release(skill): v${recovered.targetVersion}`
+  const expectedRemoteBase = recovered.remoteBaseCommit ?? recovered.baseCommit
 
   if (!phaseAtLeast(recovered, 'committed')) {
     if (context.localHead !== recovered.baseCommit) {
@@ -250,7 +309,7 @@ export function reconcileResumeGitState(state, context) {
   else if (recovered.phase === 'clawhub_ready' && context.remoteMaster === recovered.releaseCommit) {
     recovered.phase = 'master_pushed'
   }
-  else if (context.remoteMaster !== recovered.baseCommit) {
+  else if (context.remoteMaster !== expectedRemoteBase) {
     throw new Error('origin/master changed since this release was frozen')
   }
 

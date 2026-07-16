@@ -10,11 +10,11 @@ Podcast and video transcription: [https://deyo.miaobi.fun](https://deyo.miaobi.f
 
 It documents CLI installation, API key authentication, local config precedence, link/file command construction, stable transcript events, live AI cleanup and final cleaned TXT delivery, result format selection, development base URLs, and common troubleshooting rules.
 
-`deyo/SKILL.md` is the only hand-edited Skill source. Scripts generate the Codex plugin, Claude plugin, and Gemini extension copies. `deyo/manifest.json` is the repository's only Skill version source. The CLI and Skill have independent installation, versions, and updates: a Skill may require CLI `>=0.2.0` without sharing its version.
+`deyo/SKILL.md` is the only hand-edited Skill source. Scripts generate the Codex plugin, Claude plugin, and Gemini extension copies. `deyo/manifest.json` is the repository's only Skill version source. The pending Skill requires CLI `>=0.2.1`, while CLI and Skill installation, versions, and updates remain independent.
 
 ## When To Use
 
-Use this skill when:
+Use this skill only when the current user explicitly asks for one of these actions:
 
 - The user wants to install, configure, or upgrade `deyo`
 - The user wants to transcribe a supported link with `deyo`
@@ -24,14 +24,16 @@ Use this skill when:
 - The user wants to verify `--source`, `--file`, `--mime-type`, `--format`, `--progress-format`, `--stream-transcript`, `-O`, stdout behavior, or chat-visible live cleanup behavior
 - The user wants to troubleshoot upload, media checks, direct subtitles, minute balance, or unsupported source branches
 
+A Deyo mention, ambient attachment, current directory, editor selection, clipboard, or other context is not a trigger. A transcription request must identify one URL or one exact local path; reject directories, globs, stdin, batches, and inferred attachments. Do not infer authorization to log in, install, upgrade, save an API key, read other files, or change configuration from a transcription or troubleshooting request.
+
 ## Core Rules
 
 - Prefer the installed `deyo` command.
-- If `deyo` is missing, or `deyo --help` does not list `--stream-transcript`, `--progress-format`, `--file`, and `--mime-type`, install or upgrade to `@casatwy/deyo@^0.2.0` first.
+- If `deyo` is missing, older than `0.2.1`, or `deyo --help` does not list `--stream-transcript`, `--progress-format`, `--file`, and `--mime-type`, install or upgrade to `@casatwy/deyo@^0.2.0` first.
 - Use the production service and the CLI's default configuration by default; only pass `--base-url http://deyo.mac-studio` when the user explicitly asks for local/development mode.
 - Never invent an API key; if the user does not provide one, ask them to create it from `https://deyo.miaobi.fun/me/api-keys`.
-- Once the user provides an API key, save it locally with `deyo auth login --api-key '...'`.
-- Unless the user explicitly requests another output language, default to `--language zh`.
+- Save an API key with `deyo auth login --api-key '...'` only when the user explicitly asks to persist it.
+- Omit `--language` by default for server-side automatic detection. Add `--language <language>` only when the user explicitly selects a supported language; never infer it from conversation language, title, or locale.
 - Link transcription and local file upload transcription both require API key auth; full transcription jobs consume the user's minute balance.
 - If YouTube has directly usable subtitles, the CLI returns subtitle output directly without a long transcription job and without consuming minutes.
 - For every agent-run upload task, and every agent-run transcription task that may take more than a moment, default to `--progress-format jsonl`.
@@ -82,7 +84,7 @@ For normal use and production service access, do not pass `--base-url` explicitl
 
 ```bash
 deyo auth login --api-key 'deyo_sk_xxx' --base-url http://deyo.mac-studio
-deyo --base-url http://deyo.mac-studio --language zh -O ./tmp/out.txt 'https://www.youtube.com/watch?v=xxxx'
+deyo --base-url http://deyo.mac-studio -O ./tmp/out.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 ## Command Reference
@@ -146,7 +148,7 @@ Progress and status messages are written to stderr, not stdout or the `-O` resul
 This remains an agent capability, not a built-in CLI capability. In ordinary cleaned `text` mode, make the CLI write final Whisper raw text to a `0600` file inside a `0700` temporary directory. Never give the user's target `.txt` path directly to the CLI:
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript -O "$raw_path" '<url>'
+deyo --format text --progress-format jsonl --stream-transcript -O "$raw_path" '<url>'
 ```
 
 Consume only stable transcript events. Target about 600 Unicode code points per chunk and choose a natural paragraph, sentence, clause, or whitespace boundary between 400 and 920. Only the terminal tail may be shorter than 400; never exceed 920. Keep adjacent context for cross-chunk punctuation, names, and terminology, but return only the current chunk.
@@ -218,11 +220,11 @@ Local upload events do not include signed URLs, file hashes, or part ETags. Uplo
 ## Recommended Workflow
 
 1. Confirm that `deyo` is installed.
-2. Confirm that `deyo --version` is at least `0.2.0` and help includes `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, `json`, and `verbose_json`.
+2. Confirm that `deyo --version` is at least `0.2.1` and help includes automatic detection when language is omitted, `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, `json`, and `verbose_json`.
 3. Confirm whether the target is a URL or a local file, plus output format and output path.
-4. If local auth is missing, ask the user for an API key and run `deyo auth login --api-key '...'`.
+4. If local auth is missing, explain that an API key is required. Run `deyo auth login --api-key '...'` only when the user explicitly asks to save a provided key.
 5. Add `--base-url http://deyo.mac-studio` only when the user explicitly asks for local/development mode.
-6. Unless the user explicitly asks for another language, add `--language zh`.
+6. Omit `--language` for automatic detection; add `--language <language>` only after the user explicitly selects a supported language.
 7. Add `--source` only when forcing a platform is useful; do not pass a non-`upload` `--source` for local files.
 8. For local file tasks, use the positional file path or `--file`; add `--mime-type` only when useful.
 9. For an ordinary cleaned `text`, create a restricted temporary raw file and add `--format text --progress-format jsonl --stream-transcript`. Do not stream transcript text for raw/SRT/VTT/JSON/verbose JSON.
@@ -248,85 +250,85 @@ deyo auth login --api-key 'deyo_sk_xxx'
 Write Chinese Whisper raw text (only when the user explicitly requests raw):
 
 ```bash
-deyo --language zh -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
+deyo -O ./tmp/transcript.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 AI live cleanup mode (`$raw_path` must be inside a restricted temporary directory):
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript -O "$raw_path" 'https://www.youtube.com/watch?v=xxxx'
+deyo --format text --progress-format jsonl --stream-transcript -O "$raw_path" 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 Transcribe a local file and preserve Whisper raw text (raw mode only):
 
 ```bash
-deyo --language zh -O ./tmp/audio.txt ./audio.mp3
+deyo -O ./tmp/audio.txt ./audio.mp3
 ```
 
 Transcribe a local file with an explicit file flag and MIME type:
 
 ```bash
-deyo --language zh --format text --progress-format jsonl --stream-transcript --file ./audio.mp3 --mime-type audio/mpeg -O "$raw_path"
+deyo --format text --progress-format jsonl --stream-transcript --file ./audio.mp3 --mime-type audio/mpeg -O "$raw_path"
 ```
 
 Force YouTube and export SRT:
 
 ```bash
-deyo --language zh --source youtube --format srt -O ./tmp/out.srt 'https://youtu.be/xxxx'
+deyo --source youtube --format srt -O ./tmp/out.srt 'https://youtu.be/xxxx'
 ```
 
 Export VTT:
 
 ```bash
-deyo --language zh --format vtt -O ./tmp/out.vtt 'https://www.youtube.com/watch?v=xxxx'
+deyo --format vtt -O ./tmp/out.vtt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 Read JSON from stdout:
 
 ```bash
-deyo --language zh --format json 'https://www.bilibili.com/video/BVxxxx'
+deyo --format json 'https://www.bilibili.com/video/BVxxxx'
 ```
 
 Read more complete JSON:
 
 ```bash
-deyo --language zh --format verbose_json 'https://www.bilibili.com/video/BVxxxx'
+deyo --format verbose_json 'https://www.bilibili.com/video/BVxxxx'
 ```
 
 Use a temporary API key:
 
 ```bash
-deyo --api-key 'deyo_sk_other' --language zh 'https://www.bilibili.com/video/BVxxxx'
+deyo --api-key 'deyo_sk_other' 'https://www.bilibili.com/video/BVxxxx'
 ```
 
 Use the development environment with raw output (only when explicitly requested):
 
 ```bash
-deyo --base-url http://deyo.mac-studio --language zh -O ./tmp/dev.txt 'https://www.youtube.com/watch?v=xxxx'
+deyo --base-url http://deyo.mac-studio -O ./tmp/dev.txt 'https://www.youtube.com/watch?v=xxxx'
 ```
 
 Transcribe a Ximalaya episode:
 
 ```bash
-deyo --language zh -O ./tmp/ximalaya.txt 'https://www.ximalaya.com/sound/963656969'
+deyo -O ./tmp/ximalaya.txt 'https://www.ximalaya.com/sound/963656969'
 ```
 
 Force Twitter/X:
 
 ```bash
-deyo --language zh --source twitter -O ./tmp/tweet.txt 'https://x.com/historyinmemes/status/1790637656616943991'
+deyo --source twitter -O ./tmp/tweet.txt 'https://x.com/historyinmemes/status/1790637656616943991'
 ```
 
 Bilibili player embed links must include `bvid`:
 
 ```bash
-deyo --language zh -O ./tmp/bilibili.txt 'https://player.bilibili.com/player.html?bvid=BVxxxx&page=2&cid=123456'
+deyo -O ./tmp/bilibili.txt 'https://player.bilibili.com/player.html?bvid=BVxxxx&page=2&cid=123456'
 ```
 
 Bilibili app video share links can be passed directly. The CLI submits the original app URL; Whisper resolves `h5awaken.open_app_url`, an `open_app_url` inside base64 `h5awaken`, or a BV path segment:
 
 ```bash
-deyo --language zh -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
+deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 ```
 
 ## Source Boundaries
@@ -353,7 +355,7 @@ deyo --language zh -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - If uploaded file SHA-256 verification fails, ask the user to select the file again and retry.
 - Interrupting the local CLI after task creation does not cancel the server-side task; the CLI reports that server transcription is still running or the upload is still being processed.
 - If the user reports missing progress updates, verify that `deyo --help` includes `--progress-format`; if not, upgrade the published CLI first.
-- If stable transcript events are missing, require CLI `0.2.0+` and verify that final `text`, `--progress-format jsonl`, and `--stream-transcript` are all present.
+- If stable transcript events are missing, require CLI `0.2.1+` and verify that final `text`, `--progress-format jsonl`, and `--stream-transcript` are all present.
 - If delta offsets, character counts, sequence, or the completed SHA-256 do not match, stop trusting live text, tell the user live cleanup is unavailable, and keep waiting for final raw text. Do not cancel the server task.
 - If live progress stops mid-run, check whether the CLI emitted an SSE fallback notice.
 - If a task ends almost immediately, check whether it was a direct-subtitle-return case rather than a long transcription path.
@@ -414,18 +416,18 @@ deyo skill install --platform openclaw
 deyo skill status --platform openclaw
 ```
 
-After installation, save the API key once:
+Only when the user explicitly asks to persist an API key, run login:
 
 ```bash
 deyo auth login --api-key 'deyo_sk_xxx'
 ```
 
-The default target is the owner-qualified `@casatwy/deyo --global`. Use `deyo skill install --platform openclaw --scope workspace` only when the current OpenClaw workspace needs an isolated install. Installation and updates handle only the active scope and never use `--all` or `--force`. No Cron job is created. On invocation, the Skill uses OpenClaw's native `verify` / `update` at most once per 24 hours with a 20-second timeout, and updates only after a `pass/clean` security verification. Failure continues on the old version; a successful update requires invoking Deyo again.
+The default target is the owner-qualified `@casatwy/deyo --global`. Use `deyo skill install --platform openclaw --scope workspace` only when the current OpenClaw workspace needs an isolated install. OpenClaw exposes Deyo only through an explicit `/deyo` command and disables model-initiated invocation. Installation and updates handle only the active scope and never use `--all`, `--force`, `--force-install`, or a risk acknowledgement bypass. No Cron job is created. At most once per explicit invocation per 24 hours, the Skill verifies the owner-qualified candidate selected by `--tag latest`, then uses OpenClaw's native single-item update under one 20-second deadline. Identity, stable version, and `pass/clean` security must all match. It compares `.clawhub/origin.json` before and after instead of parsing localized command output. Failure continues on the old version; a changed or indeterminate result stops the turn and requires another invocation. Set `DEYO_OPENCLAW_AUTO_UPDATE=0` to disable the check before state or child-process creation.
 
 Once installed, you can ask OpenClaw directly, for example:
 
 ```text
-Use deyo to turn this YouTube link into a Chinese SRT
+/deyo turn this YouTube link into a Chinese SRT
 ```
 
 ## Use With Gemini CLI
@@ -478,3 +480,15 @@ make abort
 This command is separate from normal `publish` and `RESUME=1`. It rechecks the official Git branch, upstream, origin, local/remote master, local/remote target tag, complete immutable ClawHub history, and the exact target version online. CI, a non-interactive terminal, a non-`frozen` state, or any conflict stops the abort. The confirmation phrase is exactly `abort deyo v<target version>`.
 
 Aborting does not change the worktree, Git remotes, or ClawHub. The active state is atomically renamed on the same filesystem into private storage under `.git/deyo-release/aborted/`, with the original state, abort time, reason, and current source snapshot recorded. Do not delete state manually or edit a frozen snapshot and attempt `RESUME=1`. After a successful abort, normal `make publish` enumerates ClawHub again and freezes the same patch when the immutable maximum and target reservation remain unchanged.
+
+## Maintainers: Terminal Security Fix-Forward
+
+Run this only when a release is exactly `tag_pushed`, the immutable ClawHub exact version and `latest` both resolve to it, its artifact exactly matches the tag archive, remote `master` is still at the pre-release base, and the sole terminal ClawHub verification failure is `security.status_not_clean`:
+
+```bash
+make fix-forward
+```
+
+This command never repairs, overwrites, or deletes the published version and never moves its tag, `latest`, or remote `master`. Before and after confirmation it rechecks the official origin/upstream, local and remote master, local and remote tag, complete ClawHub history, exact and next-patch versions, tag-archive fingerprint, and terminal verification verdict. CI, a non-interactive terminal, a success receipt, a phase other than `tag_pushed`, pending/review status, extra failure reasons, or any drift stops the command. The exact confirmation phrase is `fix-forward deyo v<failed version> to v<next patch>`.
+
+On success, the active state is atomically renamed on the same filesystem into private `.git/deyo-release/abandoned/` storage. Its audit preserves the original state, time, `security.status_not_clean` verdict/findings, current source snapshot, tag/tree/artifact fingerprint, and next target. The command itself does not modify the worktree or any external state. After repairing canonical content, run normal `make publish`. The publisher permits local `master` at the failed release commit while remote `master` remains at the old base only when the abandoned audit and all immutable evidence still match, then allocates the next patch from ClawHub's highest failed version. Remote `master` never advances until that next version is pass/clean; activation includes both commits in history and the verified fix-forward release must be the tip.
