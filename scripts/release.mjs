@@ -15,6 +15,7 @@ import {
   assertStableSemver,
   assertTargetAbsent,
   clawHubFileFingerprint,
+  compareSemver,
   compareFingerprints,
   ClawHubConflictError,
   confirmationPhrase,
@@ -394,16 +395,23 @@ async function runRepositoryValidation() {
 
 async function assertCliPublished(minimumCliVersion, targetVersion) {
   await progressStage('Verify minimum npm CLI version', async () => {
-    const result = await textCommand('npm', ['view', `@casatwy/deyo@${minimumCliVersion}`, 'version', '--json'], { allowFailure: true, timeoutMs: NETWORK_TIMEOUT_MS })
+    const compatibleRange = `^${minimumCliVersion}`
+    const result = await textCommand('npm', ['view', `@casatwy/deyo@${compatibleRange}`, 'version', '--json'], { allowFailure: true, timeoutMs: NETWORK_TIMEOUT_MS })
     if (result.code !== 0) {
       throw new CommandExecutionError('npm view', {
         code: result.code,
         signal: result.signal,
-        message: `@casatwy/deyo@${minimumCliVersion} must be published before Deyo Skill v${targetVersion}`,
+        message: `A published @casatwy/deyo version satisfying ${compatibleRange} is required before Deyo Skill v${targetVersion}`,
       })
     }
-    if (JSON.parse(result.stdout || 'null') !== minimumCliVersion) {
-      throw new Error(`@casatwy/deyo@${minimumCliVersion} must be published before Deyo Skill v${targetVersion}`)
+    const payload = JSON.parse(result.stdout || 'null')
+    const publishedVersion = Array.isArray(payload) ? payload.at(-1) : payload
+    assertStableSemver(publishedVersion, 'published CLI version')
+    if (compareSemver(publishedVersion, minimumCliVersion) < 0) {
+      throw new Error(
+        `Published @casatwy/deyo ${publishedVersion} does not satisfy minimum CLI ${minimumCliVersion} ` +
+        `for Deyo Skill v${targetVersion}`,
+      )
     }
   })
 }

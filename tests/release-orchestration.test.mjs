@@ -263,11 +263,12 @@ const path = require('node:path')
 const command = path.basename(process.argv[1])
 const args = process.argv.slice(2)
 if (command === 'npm' && args[0] === 'view') {
+  fs.appendFileSync(process.env.MOCK_NPM_LOG, JSON.stringify(args) + '\\n')
   if (process.env.MOCK_NPM_FAIL === '1') {
     process.stderr.write('simulated npm lookup failure\\n')
     process.exit(42)
   }
-  process.stdout.write(JSON.stringify('0.2.2'))
+  process.stdout.write(JSON.stringify(process.env.MOCK_NPM_VERSION || '0.2.3'))
   process.exit(0)
 }
 if (command === 'pnpm') {
@@ -372,6 +373,7 @@ async function createFixture() {
     MOCK_GIT_LOG: path.join(parent, 'git.log'),
     MOCK_GIT_FAIL_MARKER: path.join(parent, 'git-failed-once'),
     MOCK_CLAWHUB_STATE: mockState,
+    MOCK_NPM_LOG: path.join(parent, 'npm.log'),
     HOME: path.join(parent, 'home'),
   }
   for (const key of ['CI', 'GITHUB_ACTIONS', 'BUILDKITE', 'JENKINS_URL', 'TF_BUILD']) delete env[key]
@@ -511,6 +513,10 @@ test('release dry-run computes 1.0.9 and performs zero repository writes', { tim
     assert.match(result.stderr, /\[release\] START Check Git release preflight/)
     assert.match(result.stderr, /\[release\] OK Run ClawHub publish dry-run/)
     assert.doesNotMatch(result.stderr, /\u001B\[/)
+    const npmCommands = (await readFile(fixture.env.MOCK_NPM_LOG, 'utf8'))
+      .trim().split('\n').map(line => JSON.parse(line))
+    assert.deepEqual(npmCommands.at(-1), ['view', '@casatwy/deyo@^0.2.2', 'version', '--json'])
+    assert.match(result.stdout, /"0\.2\.3"/)
     assert.match(result.stdout, /1\.0\.8 -> 1\.0\.9/)
     assert.match(result.stdout, /No files, state, commits, tags, pushes, or publications/)
     assert.equal((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim(), headBefore)
@@ -918,8 +924,8 @@ test('terminal security fix-forward rejects unsafe state, evidence, environment,
   }
 })
 
-test('formal release rejects environment, confirmation, auth, and npm prerequisite failures before state', { timeout: 40_000 }, async (t) => {
-  for (const scenario of ['non-tty', 'ci', 'confirmation', 'auth', 'npm']) {
+test('formal release rejects environment, confirmation, auth, and npm prerequisite failures before state', { timeout: 45_000 }, async (t) => {
+  for (const scenario of ['non-tty', 'ci', 'confirmation', 'auth', 'npm', 'npm-old']) {
     await t.test(scenario, async () => {
       const fixture = await createFixture()
       try {
@@ -928,17 +934,22 @@ test('formal release rejects environment, confirmation, auth, and npm prerequisi
         else if (scenario === 'ci') result = await fixture.cli([], { CI: 'true' })
         else if (scenario === 'confirmation') result = await fixture.formal([], { MOCK_CONFIRM: 'wrong' })
         else if (scenario === 'auth') result = await fixture.cli(['--dry-run'], { MOCK_CLAWHUB_ACCOUNT: 'someone-else' })
-        else result = await fixture.cli(['--dry-run'], { MOCK_NPM_FAIL: '1' })
+        else if (scenario === 'npm') result = await fixture.cli(['--dry-run'], { MOCK_NPM_FAIL: '1' })
+        else result = await fixture.cli(['--dry-run'], { MOCK_NPM_VERSION: '0.2.1' })
         assert.equal(result.code, 1)
         if (scenario === 'non-tty') assert.match(result.stderr, /interactive TTY/)
         if (scenario === 'ci') assert.match(result.stderr, /forbidden in CI/)
         if (scenario === 'confirmation') assert.match(result.stderr, /confirmation mismatch/)
         if (scenario === 'auth') assert.match(result.stderr, /login must be casatwy/)
         if (scenario === 'npm') {
-          assert.match(result.stderr, /@casatwy\/deyo@0\.2\.2 must be published/)
+          assert.match(result.stderr, /published @casatwy\/deyo version satisfying \^0\.2\.2 is required/)
           assert.match(result.stderr, /FAIL Verify minimum npm CLI version \([^\n]+; exit=42\)/)
           assert.match(result.stderr, /FAILURE stage=Verify minimum npm CLI version; exit=42; recovery_phase=none/)
           assert.equal(result.stderr.match(/simulated npm lookup failure/g)?.length, 1)
+        }
+        if (scenario === 'npm-old') {
+          assert.match(result.stderr, /Published @casatwy\/deyo 0\.2\.1 does not satisfy minimum CLI 0\.2\.2/)
+          assert.match(result.stderr, /FAILURE stage=Verify minimum npm CLI version; recovery_phase=none/)
         }
         await assertMissing(fixture.statePath)
         assert.equal((await fixture.git(['tag', '--list'])).stdout, '')
