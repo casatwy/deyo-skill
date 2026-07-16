@@ -17,24 +17,32 @@ Use the installed `deyo` CLI for Deyo transcription tasks instead of the web UI.
 
 ## OpenClaw Invocation Update Check
 
-Only when this skill is running inside OpenClaw, run the bundled check before any transcription command:
+Only when this skill is running inside OpenClaw, run the CLI-owned check before any transcription command:
 
 ```bash
-node '{baseDir}/scripts/openclaw-auto-update.mjs' --scope global
+deyo skill _openclaw-check --scope global
 ```
 
 - Use `--scope workspace` only when this exact active skill was intentionally installed in the current OpenClaw workspace instead of the default global managed scope.
-- Set `DEYO_OPENCLAW_AUTO_UPDATE=0` to disable the invocation-time check. It returns before creating update state or starting a child process.
-- The check verifies the owner-qualified `@casatwy/deyo` candidate selected by `--tag latest`, then uses only `openclaw skills update @casatwy/deyo`; never add `--all`, `--force`, `--force-install`, or a risk-acknowledgement bypass.
-- The check attempts at most once every 24 hours, has one shared 20-second deadline, requires the exact candidate and ClawHub verification to be `pass` and `clean`, compares managed `.clawhub/origin.json` before and after updating, and keeps all child output away from the transcription stdout and output files.
-- Exit code `0` means continue normally, including when the check is not due, busy, already current, or failed. A failed check must not block the user's existing installed skill.
-- Exit code `10` means the installed skill changed or the update result is indeterminate. Stop this turn before starting transcription and ask the user to invoke Deyo again so OpenClaw can load or re-check the active version.
+- Set `DEYO_OPENCLAW_AUTO_UPDATE=0` to opt out. Direct native OpenClaw installs are not enrolled; the check remains read-only for them and continues with the installed Skill.
+- The check runs at most once every 24 hours and only verifies the owner-qualified `@casatwy/deyo` candidate selected by the `latest` tag. It requires a stable version, `resolvedFrom: tag`, `tag: latest`, and ClawHub security `pass` and `clean`. It does not install or update anything.
+- Exit code `0` means continue normally with the installed Skill, including when opted out, not enrolled, not due, busy, already current, or a known check/update failure left the installed origin unchanged.
+- Exit code `11` means a verified candidate is pending. Tell the user the exact candidate version, owner-qualified source, and security result reported by the check, then ask: `是否现在更新Deyo到latest`. An absent, ambiguous, or negative reply is not consent; continue this turn with the installed Skill and do not update.
+- Only after an explicit affirmative reply to that current prompt, run exactly:
+
+  ```bash
+  deyo skill update --platform openclaw --scope global --confirm-latest 'update @casatwy/deyo to latest now'
+  ```
+
+  Keep the active scope. Never add `--all`, `--force`, `--force-install`, `--ack-risk`, a fixed ref, or any other risk bypass.
+- The confirmation command re-verifies `latest`. If it exits `11`, the candidate changed and the earlier confirmation is stale: show the new candidate and ask the same question again before any update. If it exits `10`, the managed origin changed or the result is indeterminate: stop before transcription and ask the user to invoke `/deyo` again so OpenClaw can load or re-check the active version. If it exits `0`, continue with the still-loaded installed Skill.
+- Keep update-check and native-manager output away from transcription stdout, JSONL, raw output, and cleaned output files.
 - Do not create Cron jobs, background services, launch agents, or persistent timers for updates.
 
 ## Install And Discovery
 
 - Prefer the installed `deyo` command. Check with `command -v deyo`, then inspect `deyo --help` and `deyo --version`.
-- Require CLI `0.2.1` or newer so omitting `--language` sends no language field and requests automatic detection. Also verify that help lists `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, and `verbose_json`.
+- Require CLI `0.2.2` or newer for the consent-gated OpenClaw update manager and automatic language detection when `--language` is omitted. Also verify that help lists `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, and `verbose_json`.
 - If the command or required capability is missing, install or upgrade the published CLI:
 
 ```bash

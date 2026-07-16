@@ -182,7 +182,10 @@ export function validateReleaseState(state) {
       }
     }
     const requiresProjectionMetadata = compareSemver(state.targetVersion, '1.0.10') >= 0
-    if (requiresProjectionMetadata && state.clawHubProjectionKind !== 'openclaw-v1') {
+    const expectedProjectionKind = compareSemver(state.targetVersion, '1.0.11') >= 0
+      ? 'openclaw-v2'
+      : 'openclaw-v1'
+    if (requiresProjectionMetadata && state.clawHubProjectionKind !== expectedProjectionKind) {
       throw new Error('ClawHub-ready state is missing its OpenClaw projection kind')
     }
     if (

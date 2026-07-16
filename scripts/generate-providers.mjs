@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { assertStableSemver, describeTree, hashTree } from './release-core.mjs'
+import { assertStableSemver, compareSemver, describeTree, hashTree } from './release-core.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const canonicalDirectory = path.join(root, 'deyo')
@@ -18,7 +18,6 @@ const CANONICAL_LAYOUT = new Map([
   ['agents/openai.yaml', 'file'],
   ['manifest.json', 'file'],
   ['scripts', 'directory'],
-  ['scripts/openclaw-auto-update.mjs', 'file'],
   ['scripts/publish-cleaned.mjs', 'file'],
 ])
 
@@ -69,6 +68,27 @@ export async function generateProviders(outputRoot = root, sourceDirectory = can
   const manifest = await readManifest(sourceDirectory)
   const version = manifest.skillVersion
   const canonicalTreeHash = await hashTree(sourceDirectory)
+  const openClawProjection = compareSemver(version, '1.0.11') >= 0
+    ? {
+        artifactProjection: 'openclaw-v2',
+        projectionSince: '1.0.11',
+        excludedPaths: ['agents/**', 'scripts/openclaw-auto-update.mjs'],
+        userInvocable: true,
+        disableModelInvocation: true,
+        requiresBins: ['deyo', 'openclaw'],
+        updateTransport: 'npm-cli',
+      }
+    : compareSemver(version, '1.0.10') >= 0
+      ? {
+          artifactProjection: 'openclaw-v1',
+          projectionSince: '1.0.10',
+          excludedPaths: ['agents/**'],
+          userInvocable: true,
+          disableModelInvocation: true,
+        }
+      : {
+          artifactProjection: 'legacy-full',
+        }
 
   for (const directory of GENERATED_DIRECTORIES) {
     await rm(path.join(outputRoot, directory), { recursive: true, force: true })
@@ -189,11 +209,7 @@ export async function generateProviders(outputRoot = root, sourceDirectory = can
         registry: '@casatwy/deyo',
         license: 'MIT-0',
         skillPath: 'deyo',
-        artifactProjection: 'openclaw-v1',
-        projectionSince: '1.0.10',
-        excludedPaths: ['agents/**'],
-        userInvocable: true,
-        disableModelInvocation: true,
+        ...openClawProjection,
       },
     },
   })

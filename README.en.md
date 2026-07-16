@@ -10,7 +10,7 @@ Podcast and video transcription: [https://deyo.miaobi.fun](https://deyo.miaobi.f
 
 It documents CLI installation, API key authentication, local config precedence, link/file command construction, stable transcript events, live AI cleanup and final cleaned TXT delivery, result format selection, development base URLs, and common troubleshooting rules.
 
-`deyo/SKILL.md` is the only hand-edited Skill source. Scripts generate the Codex plugin, Claude plugin, and Gemini extension copies. `deyo/manifest.json` is the repository's only Skill version source. The pending Skill requires CLI `>=0.2.1`, while CLI and Skill installation, versions, and updates remain independent.
+`deyo/SKILL.md` is the only hand-edited Skill source. Scripts generate the Codex plugin, Claude plugin, and Gemini extension copies. `deyo/manifest.json` is the repository's only Skill version source. Skill `1.0.11` requires CLI `>=0.2.2`, while CLI and Skill installation, versions, and updates remain independent.
 
 ## When To Use
 
@@ -29,7 +29,7 @@ A Deyo mention, ambient attachment, current directory, editor selection, clipboa
 ## Core Rules
 
 - Prefer the installed `deyo` command.
-- If `deyo` is missing, older than `0.2.1`, or `deyo --help` does not list `--stream-transcript`, `--progress-format`, `--file`, and `--mime-type`, install or upgrade to `@casatwy/deyo@^0.2.0` first.
+- If `deyo` is missing, older than `0.2.2`, or `deyo --help` does not list `--stream-transcript`, `--progress-format`, `--file`, and `--mime-type`, install or upgrade to `@casatwy/deyo@^0.2.0` first.
 - Use the production service and the CLI's default configuration by default; only pass `--base-url http://deyo.mac-studio` when the user explicitly asks for local/development mode.
 - Never invent an API key; if the user does not provide one, ask them to create it from `https://deyo.miaobi.fun/me/api-keys`.
 - Save an API key with `deyo auth login --api-key '...'` only when the user explicitly asks to persist it.
@@ -220,7 +220,7 @@ Local upload events do not include signed URLs, file hashes, or part ETags. Uplo
 ## Recommended Workflow
 
 1. Confirm that `deyo` is installed.
-2. Confirm that `deyo --version` is at least `0.2.1` and help includes automatic detection when language is omitted, `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, `json`, and `verbose_json`.
+2. Confirm that `deyo --version` is at least `0.2.2` and help includes automatic detection when language is omitted, `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, `json`, and `verbose_json`.
 3. Confirm whether the target is a URL or a local file, plus output format and output path.
 4. If local auth is missing, explain that an API key is required. Run `deyo auth login --api-key '...'` only when the user explicitly asks to save a provided key.
 5. Add `--base-url http://deyo.mac-studio` only when the user explicitly asks for local/development mode.
@@ -355,7 +355,7 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - If uploaded file SHA-256 verification fails, ask the user to select the file again and retry.
 - Interrupting the local CLI after task creation does not cancel the server-side task; the CLI reports that server transcription is still running or the upload is still being processed.
 - If the user reports missing progress updates, verify that `deyo --help` includes `--progress-format`; if not, upgrade the published CLI first.
-- If stable transcript events are missing, require CLI `0.2.1+` and verify that final `text`, `--progress-format jsonl`, and `--stream-transcript` are all present.
+- If stable transcript events are missing, require CLI `0.2.2+` and verify that final `text`, `--progress-format jsonl`, and `--stream-transcript` are all present.
 - If delta offsets, character counts, sequence, or the completed SHA-256 do not match, stop trusting live text, tell the user live cleanup is unavailable, and keep waiting for final raw text. Do not cancel the server task.
 - If live progress stops mid-run, check whether the CLI emitted an SSE fallback notice.
 - If a task ends almost immediately, check whether it was a direct-subtitle-return case rather than a long transcription path.
@@ -422,7 +422,9 @@ Only when the user explicitly asks to persist an API key, run login:
 deyo auth login --api-key 'deyo_sk_xxx'
 ```
 
-The default target is the owner-qualified `@casatwy/deyo --global`. Use `deyo skill install --platform openclaw --scope workspace` only when the current OpenClaw workspace needs an isolated install. OpenClaw exposes Deyo only through an explicit `/deyo` command and disables model-initiated invocation. Installation and updates handle only the active scope and never use `--all`, `--force`, `--force-install`, or a risk acknowledgement bypass. No Cron job is created. At most once per explicit invocation per 24 hours, the Skill verifies the owner-qualified candidate selected by `--tag latest`, then uses OpenClaw's native single-item update under one 20-second deadline. Identity, stable version, and `pass/clean` security must all match. It compares `.clawhub/origin.json` before and after instead of parsing localized command output. Failure continues on the old version; a changed or indeterminate result stops the turn and requires another invocation. Set `DEYO_OPENCLAW_AUTO_UPDATE=0` to disable the check before state or child-process creation.
+The default target is the owner-qualified `@casatwy/deyo --global`. Use `deyo skill install --platform openclaw --scope workspace` only when the current OpenClaw workspace needs an isolated install. A fresh install is enrolled only after a strict reread of the official managed origin; an existing official managed install is enrolled without being updated by `install`, and a direct native OpenClaw install is not enrolled automatically. OpenClaw exposes Deyo only through an explicit `/deyo` command and disables model-initiated invocation.
+
+On explicit invocation, the CLI verifies the owner-qualified `latest` candidate at most once every 24 hours and does not update it. Only a stable version with `resolvedFrom: tag`, `tag: latest`, and security `pass/clean` is shown with its source and security result before asking `是否现在更新Deyo到latest`. After an explicit affirmative reply in that turn, run `deyo skill update --platform openclaw --scope global --confirm-latest 'update @casatwy/deyo to latest now'`; keep `workspace` when that is the active scope. The CLI re-verifies the candidate and rejects stale confirmation. A successful, changed-origin, or indeterminate result stops the turn and requires another `/deyo` invocation; a known failure with an unchanged origin continues on the old version. The flow never uses `--all`, `--force`, `--force-install`, or risk bypasses, never contaminates transcription stdout/JSONL/raw/cleaned files, and creates no Cron job. Set `DEYO_OPENCLAW_AUTO_UPDATE=0` to opt out.
 
 Once installed, you can ask OpenClaw directly, for example:
 

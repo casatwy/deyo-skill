@@ -15,4 +15,4 @@ gemini_cli:
     - "运行 deyo 前必须具备 API key；普通情况使用默认生产服务，只有用户明确要求本地/开发环境时才传 --base-url http://deyo.mac-studio。"
     - "只有当前用户明确要求转写一个写明的 URL / 精确本地文件，或明确要求 Deyo install / status / 排障时才调用；不得从隐式附件、目录、glob、stdin、批量或上下文推断授权。"
     - "默认省略 --language 以自动检测；只有用户明确选择支持语言时才传 --language <language>。"
-    - "要求 deyo CLI 0.2.1+；省略 --language 时必须不发送 language 字段并使用自动检测，整理纯文本时使用 --stream-transcript 与 --progress-format jsonl；最终文件必须从权限受限的终态 raw 重新完整整理。"
+    - "要求 deyo CLI 0.2.2+；省略 --language 时必须不发送 language 字段并使用自动检测，整理纯文本时使用 --stream-transcript 与 --progress-format jsonl；最终文件必须从权限受限的终态 raw 重新完整整理。"

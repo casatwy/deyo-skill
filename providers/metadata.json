@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "skillVersion": "1.0.10",
-  "minimumCliVersion": "0.2.1",
-  "canonicalTreeHash": "cf020af11b4328db2d81148e6a0125c19b578cf34464aca398bfd9dedef642fd",
+  "skillVersion": "1.0.11",
+  "minimumCliVersion": "0.2.2",
+  "canonicalTreeHash": "b1bd7c15ed6fb5eaaca6e5fb9cecdfc6dea3fc26ba90983267a620416d7e204d",
   "source": {
     "repository": "https://github.com/casatwy/deyo-skill.git",
-    "ref": "v1.0.10"
+    "ref": "v1.0.11"
   },
   "providers": {
     "codex": {
@@ -26,13 +26,19 @@
       "registry": "@casatwy/deyo",
       "license": "MIT-0",
       "skillPath": "deyo",
-      "artifactProjection": "openclaw-v1",
-      "projectionSince": "1.0.10",
+      "artifactProjection": "openclaw-v2",
+      "projectionSince": "1.0.11",
       "excludedPaths": [
-        "agents/**"
+        "agents/**",
+        "scripts/openclaw-auto-update.mjs"
       ],
       "userInvocable": true,
-      "disableModelInvocation": true
+      "disableModelInvocation": true,
+      "requiresBins": [
+        "deyo",
+        "openclaw"
+      ],
+      "updateTransport": "npm-cli"
     }
   }
 }

@@ -1,6 +1,6 @@
-# Deyo Skill v1.0.10 security and correctness fix-forward
+# Deyo Skill v1.0.11 explicit OpenClaw update consent
 
-- Require explicit user intent for one URL, one exact local file, or Deyo install/status/troubleshooting; disable implicit provider invocation.
-- Omit `--language` by default with Deyo CLI 0.2.1 so link and upload transcription use automatic language detection.
-- Make OpenClaw user-invocable only, add an update opt-out, verify the owner-qualified `latest` candidate, and compare managed origin versions without parsing localized output.
-- Publish a ClawHub-specific projection from the immutable tag that excludes provider-only `agents/**` while preserving the canonical tree hash and full Codex, Claude, and Gemini artifacts.
+- Require Deyo CLI 0.2.2 and move the OpenClaw update manager out of the Skill artifact into the installed npm CLI.
+- Enroll only verified owner-qualified managed installs, keep status offline, and check the verified `latest` candidate at most once every 24 hours without installing it.
+- Require a fresh user confirmation before `openclaw skills update @casatwy/deyo`; stale candidates are never updated under an earlier confirmation.
+- Publish an OpenClaw v2 projection that is slash-invocable only, declares the required `deyo` and `openclaw` binaries, and contains no child-process updater.

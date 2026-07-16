@@ -10,7 +10,7 @@
 
 它覆盖 `deyo` CLI 的安装、API key 鉴权、本地配置优先级、链接/文件命令拼装、稳定正文事件、AI 流式整理与最终 cleaned TXT 交付、结果格式选择、开发环境 base URL 和常见排查规则。
 
-`deyo/SKILL.md` 是唯一人工编辑的 Skill 源。Codex plugin、Claude plugin 和 Gemini extension 的 Skill 副本由脚本生成；`deyo/manifest.json` 是仓库内唯一 Skill 版本源。CLI 与 Skill 独立安装、独立版本和独立更新：当前待发布 Skill 要求 CLI `>=0.2.1`，但二者版本不需要相同。
+`deyo/SKILL.md` 是唯一人工编辑的 Skill 源。Codex plugin、Claude plugin 和 Gemini extension 的 Skill 副本由脚本生成；`deyo/manifest.json` 是仓库内唯一 Skill 版本源。CLI 与 Skill 独立安装、独立版本和独立更新：Skill `1.0.11` 要求 CLI `>=0.2.2`，但二者版本不需要相同。
 
 ## 适用场景
 
@@ -29,7 +29,7 @@
 ## 核心规则
 
 - 优先使用系统里已安装的 `deyo` 命令。
-- 如果 `deyo` 不存在、版本低于 `0.2.1`，或 `deyo --help` 里还没有 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`，先安装或升级到 `@casatwy/deyo@^0.2.0`。
+- 如果 `deyo` 不存在、版本低于 `0.2.2`，或 `deyo --help` 里还没有 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`，先安装或升级到 `@casatwy/deyo@^0.2.0`。
 - 默认使用生产服务和 CLI 默认配置；只有用户明确要求本地/开发环境时，才传 `--base-url http://deyo.mac-studio`。
 - 不要虚构 API key；如果用户没有提供，要求用户先到 `https://deyo.miaobi.fun/me/api-keys` 创建。
 - 只有用户明确要求保存 API key 时，才用 `deyo auth login --api-key '...'` 写入本地配置。
@@ -220,7 +220,7 @@ YouTube 字幕直出的 `text` 同样整理后再展示；SRT/VTT 保持原样�
 ## 推荐工作流
 
 1. 先确认机器上是否已安装 `deyo`。
-2. 先用 `deyo --version` 和 `deyo --help` 确认 CLI 至少为 `0.2.1`，并支持省略语言自动检测、`--stream-transcript`、`--progress-format`、`--file`、`--mime-type`、`json` 和 `verbose_json`。
+2. 先用 `deyo --version` 和 `deyo --help` 确认 CLI 至少为 `0.2.2`，并支持省略语言自动检测、`--stream-transcript`、`--progress-format`、`--file`、`--mime-type`、`json` 和 `verbose_json`。
 3. 确认目标是链接还是本地文件，以及输出格式和输出路径。
 4. 如果本地尚未登录，说明需要 API key；只有用户明确要求保存并提供 key 时才执行 `deyo auth login --api-key '...'`。
 5. 仅在用户明确要求本地/开发环境时追加 `--base-url http://deyo.mac-studio`。
@@ -355,7 +355,7 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - 上传后的文件 SHA-256 校验失败：重新选择文件再上传。
 - 任务创建后中断本地 CLI，不等于取消服务端任务；CLI 会提示“服务端转写仍在继续”或“服务端正在处理上传”。
 - 如果用户反馈没有进度更新，先确认 `deyo --help` 是否已经包含 `--progress-format`；如果没有，先升级 CLI。
-- 如果没有稳定正文事件，确认 `deyo --version` 至少是 `0.2.1`，且命令同时使用了最终 `text`、`--progress-format jsonl` 和 `--stream-transcript`。
+- 如果没有稳定正文事件，确认 `deyo --version` 至少是 `0.2.2`，且命令同时使用了最终 `text`、`--progress-format jsonl` 和 `--stream-transcript`。
 - 如果 delta offset、字符数、sequence 或 completed SHA-256 不一致，停止信任实时正文，明确告知实时整理不可用，继续等待终态 raw；不要取消服务端任务。
 - 如果中途丢失实时进度，留意 CLI 是否输出了“事件流中断，回退到轮询状态”的提示。
 - 如果任务创建后很快结束，优先判断是否是直接返回字幕的场景，而不是长时间转写链路。
@@ -422,7 +422,9 @@ deyo skill status --platform openclaw
 deyo auth login --api-key 'deyo_sk_xxx'
 ```
 
-默认安装目标是 owner-qualified 的 `@casatwy/deyo --global`；只有明确需要当前 OpenClaw workspace 隔离时，才使用 `deyo skill install --platform openclaw --scope workspace`。OpenClaw 版本只允许用户通过显式 `/deyo` 调用，不允许模型隐式触发。安装和更新只处理当前生效 scope，不会使用 `--all`、`--force`、`--force-install` 或风险确认绕过。不创建 Cron；每次显式调用时最多每 24 小时先用 `--tag latest` 验证 owner-qualified 候选版本，再通过 OpenClaw 原生单项 `update` 更新，共享 20 秒超时且只有 identity、稳定版本和 security verification 都通过才继续。更新前后通过 `.clawhub/origin.json` 比较版本，不解析本地化命令输出。失败继续使用旧版；版本变化或结果不确定时停止本轮并要求重新调用。设置 `DEYO_OPENCLAW_AUTO_UPDATE=0` 可在创建 state 或启动子进程前关闭检查。
+默认安装目标是 owner-qualified 的 `@casatwy/deyo --global`；只有明确需要当前 OpenClaw workspace 隔离时，才使用 `deyo skill install --platform openclaw --scope workspace`。fresh install 严格回读官方 managed origin 后登记调用时检查；已有官方 managed 安装只登记而不在 install 中更新，直接通过 OpenClaw 原生命令安装的副本不会自动登记。OpenClaw 只允许用户通过显式 `/deyo` 调用，不允许模型隐式触发。
+
+每次显式调用时，CLI 最多每 24 小时验证一次 owner-qualified `latest` 候选，不直接更新。只有稳定版本、`resolvedFrom: tag`、`tag: latest` 和 security `pass/clean` 全部匹配，Skill 才展示候选、来源、安全结果并询问 `是否现在更新Deyo到latest`。本轮获得明确同意后，才运行 `deyo skill update --platform openclaw --scope global --confirm-latest 'update @casatwy/deyo to latest now'`；workspace 使用相同 active scope。CLI 会重新验证候选，候选变化会让旧确认失效。更新成功、origin 变化或结果不确定时停止本轮并要求重新调用 `/deyo`；已知失败且 origin 未变化时继续旧版。全程不使用 `--all`、`--force`、`--force-install` 或风险绕过，不污染转写 stdout/JSONL/raw/cleaned 文件，也不创建 Cron。设置 `DEYO_OPENCLAW_AUTO_UPDATE=0` 可退出检查。
 
 安装完成后，就可以在 OpenClaw 对话里直接提需求，例如：
 

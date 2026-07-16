@@ -261,7 +261,7 @@ const path = require('node:path')
 const command = path.basename(process.argv[1])
 const args = process.argv.slice(2)
 if (command === 'npm' && args[0] === 'view') {
-  process.stdout.write(JSON.stringify('0.2.1'))
+  process.stdout.write(JSON.stringify('0.2.2'))
   process.exit(0)
 }
 if (command === 'pnpm') {
@@ -698,7 +698,7 @@ test('terminal security fix-forward archives 1.0.9 and activates only pass-clean
     assert.equal(fixed.code, 0, fixed.stderr)
     const receipt = await readJson(fixture.receiptPathFor('1.0.10'))
     assert.equal(receipt.skillVersion, '1.0.10')
-    assert.equal(receipt.minimumCliVersion, '0.2.1')
+    assert.equal(receipt.minimumCliVersion, '0.2.2')
     assert.equal(receipt.clawHubProjectionKind, 'openclaw-v1')
     assert.match(receipt.clawHubProjectionTreeHash, /^[a-f0-9]{64}$/)
     assert.notEqual(receipt.clawHubProjectionTreeHash, receipt.canonicalTreeHash)

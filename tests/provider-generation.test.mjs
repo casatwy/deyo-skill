@@ -26,11 +26,13 @@ test('provider generation removes stale artifacts and normalizes JSON modes', as
     const metadata = JSON.parse(await readFile(path.join(output, 'providers', 'metadata.json'), 'utf8'))
     assert.equal(metadata.canonicalTreeHash, generated.canonicalTreeHash)
     assert.equal(metadata.providers.openclaw.license, 'MIT-0')
-    assert.equal(metadata.providers.openclaw.artifactProjection, 'openclaw-v1')
-    assert.equal(metadata.providers.openclaw.projectionSince, '1.0.10')
-    assert.deepEqual(metadata.providers.openclaw.excludedPaths, ['agents/**'])
+    assert.equal(metadata.providers.openclaw.artifactProjection, 'openclaw-v2')
+    assert.equal(metadata.providers.openclaw.projectionSince, '1.0.11')
+    assert.deepEqual(metadata.providers.openclaw.excludedPaths, ['agents/**', 'scripts/openclaw-auto-update.mjs'])
     assert.equal(metadata.providers.openclaw.userInvocable, true)
     assert.equal(metadata.providers.openclaw.disableModelInvocation, true)
+    assert.deepEqual(metadata.providers.openclaw.requiresBins, ['deyo', 'openclaw'])
+    assert.equal(metadata.providers.openclaw.updateTransport, 'npm-cli')
   }
   finally {
     await rm(output, { recursive: true, force: true })

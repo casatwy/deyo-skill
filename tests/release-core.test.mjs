@@ -249,6 +249,31 @@ test('1.0.10 ClawHub-ready state records projection evidence separately from can
   )
 })
 
+test('1.0.11 ClawHub-ready state requires the v2 projection kind', () => {
+  const notes = 'notes\n'
+  const ready = {
+    schema: 1,
+    phase: 'clawhub_ready',
+    baseVersion: '1.0.10',
+    targetVersion: '1.0.11',
+    baseCommit: 'b'.repeat(40),
+    sourceSnapshot: 'a'.repeat(64),
+    canonicalTreeHash: 'c'.repeat(64),
+    releaseCommit: 'd'.repeat(40),
+    tag: 'v1.0.11',
+    releaseNotes: notes,
+    releaseNotesHash: sha256(notes),
+    clawHubFileFingerprint: [{ path: 'SKILL.md', size: 1, sha256: 'e'.repeat(64) }],
+    clawHubProjectionKind: 'openclaw-v2',
+    clawHubProjectionTreeHash: 'f'.repeat(64),
+  }
+  assert.equal(validateReleaseState(ready), ready)
+  assert.throws(
+    () => validateReleaseState({ ...ready, clawHubProjectionKind: 'openclaw-v1' }),
+    /projection kind/,
+  )
+})
+
 test('tree hashing includes modes, symlinks, paths, and contents', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'deyo-tree-hash-'))
   try {

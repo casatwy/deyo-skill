@@ -5,7 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
-import { assertStableSemver, hashTree, validateReleaseNotes } from './release-core.mjs'
+import { assertStableSemver, compareSemver, hashTree, validateReleaseNotes } from './release-core.mjs'
 import { checkProviders } from './generate-providers.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -52,7 +52,7 @@ export async function validateArtifacts() {
   const version = canonical.skillVersion
   assertVersion(version, version, 'canonical Skill version')
   assertStableSemver(canonical.minimumCliVersion, 'minimum CLI version')
-  assert(canonical.minimumCliVersion === '0.2.1', 'fix-forward Skill minimum CLI version must be 0.2.1')
+  assert(canonical.minimumCliVersion === '0.2.2', 'Skill minimum CLI version must be 0.2.2')
 
   await validateSkillFrontmatter('deyo/SKILL.md')
   const canonicalSkill = await readFile(path.join(root, 'deyo/SKILL.md'), 'utf8')
@@ -112,18 +112,30 @@ export async function validateArtifacts() {
   assert(metadata.providers?.claude?.plugin === 'deyo@deyo-official', 'Claude metadata plugin mismatch')
   assert(metadata.providers?.openclaw?.registry === '@casatwy/deyo', 'OpenClaw registry mismatch')
   assert(metadata.providers?.openclaw?.license === 'MIT-0', 'OpenClaw/ClawHub license must be MIT-0')
-  assert(metadata.providers?.openclaw?.artifactProjection === 'openclaw-v1', 'OpenClaw projection metadata mismatch')
-  assert(metadata.providers?.openclaw?.projectionSince === '1.0.10', 'OpenClaw projection version mismatch')
-  assert(JSON.stringify(metadata.providers?.openclaw?.excludedPaths) === JSON.stringify(['agents/**']), 'OpenClaw excluded paths mismatch')
-  assert(metadata.providers?.openclaw?.userInvocable === true, 'OpenClaw must be user-invocable')
-  assert(metadata.providers?.openclaw?.disableModelInvocation === true, 'OpenClaw model invocation must be disabled')
+  if (compareSemver(version, '1.0.11') >= 0) {
+    assert(metadata.providers?.openclaw?.artifactProjection === 'openclaw-v2', 'OpenClaw projection metadata mismatch')
+    assert(metadata.providers?.openclaw?.projectionSince === '1.0.11', 'OpenClaw projection version mismatch')
+    assert(JSON.stringify(metadata.providers?.openclaw?.excludedPaths) === JSON.stringify(['agents/**', 'scripts/openclaw-auto-update.mjs']), 'OpenClaw excluded paths mismatch')
+    assert(metadata.providers?.openclaw?.userInvocable === true, 'OpenClaw must be user-invocable')
+    assert(metadata.providers?.openclaw?.disableModelInvocation === true, 'OpenClaw model invocation must be disabled')
+    assert(JSON.stringify(metadata.providers?.openclaw?.requiresBins) === JSON.stringify(['deyo', 'openclaw']), 'OpenClaw required binaries mismatch')
+    assert(metadata.providers?.openclaw?.updateTransport === 'npm-cli', 'OpenClaw update transport must be npm-cli')
+  }
+  else if (compareSemver(version, '1.0.10') >= 0) {
+    assert(metadata.providers?.openclaw?.artifactProjection === 'openclaw-v1', 'OpenClaw projection metadata mismatch')
+  }
   await validatePluginSkill('plugins/deyo/skills/deyo', canonicalHash)
   await validatePluginSkill('skills/deyo', canonicalHash)
 
   await Promise.all([
     access(path.join(root, 'deyo/scripts/publish-cleaned.mjs')),
-    access(path.join(root, 'deyo/scripts/openclaw-auto-update.mjs')),
     access(path.join(root, 'release/next.md')),
+    access(path.join(root, 'deyo/scripts/openclaw-auto-update.mjs')).then(
+      () => { throw new Error('canonical Skill must not contain the legacy OpenClaw updater') },
+      error => {
+        if (error?.code !== 'ENOENT') throw error
+      },
+    ),
   ])
 }
 

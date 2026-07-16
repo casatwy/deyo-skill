@@ -25,7 +25,7 @@ claude_code:
     - "只有当前用户明确要求转写一个写明的 URL / 精确本地文件，或明确要求 Deyo install / status / 排障时才调用；不得从隐式附件、目录、glob、stdin、批量或上下文推断授权。"
     - "默认省略 --language 以自动检测；只有用户明确选择支持语言时才传 --language <language>。"
     - "如果 claude plugin install 失败，保留原始错误并停止，不要修改全局 git、SSH 或 npm 配置。"
-    - "要求 deyo CLI 0.2.1+；省略 --language 时必须不发送 language 字段并使用自动检测，整理纯文本时通过 --stream-transcript 与 --progress-format jsonl 消费稳定正文事件。"
+    - "要求 deyo CLI 0.2.2+；省略 --language 时必须不发送 language 字段并使用自动检测，整理纯文本时通过 --stream-transcript 与 --progress-format jsonl 消费稳定正文事件。"
     - "CLI 只写权限受限的临时 Whisper 原稿；Claude 依据终态原稿重新整理，并使用 bundled helper 原子 no-clobber 发布 cleaned TXT；并发占位或悬空 symlink 不得覆盖。"
 
 policy:
