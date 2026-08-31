@@ -46,6 +46,8 @@
 
 支持 8 类链接来源 + 单个本地音视频文件上传。
 
+可转写对象仍是具体单集、视频或单条内容。Apple Podcasts 节目主页、小宇宙播客主页和受支持的 B 站 Bangumi / UGC 合集入口只用于识别整套内容并引导用户改用具体单集或视频，不能作为整套转写任务。
+
 链接来源包括：
 
 - `xiaoyuzhou`
@@ -192,7 +194,6 @@ YouTube 字幕直出的 `text` 同样整理后再展示；SRT/VTT 保持原样�
 
 本地上传事件：
 
-- `upload.hashing`
 - `upload.started`
 - `upload.progress`
 - `upload.completed`
@@ -215,7 +216,7 @@ YouTube 字幕直出的 `text` 同样整理后再展示；SRT/VTT 保持原样�
 - `task.transcript.reset`
 - `task.transcript.completed`
 
-本地上传事件不会包含签名 URL、文件 hash 或分片 ETag。任务和结果 JSON 中的上传来源会脱敏为 `upload:file`。
+文件选定后直接进入 `upload.started`，CLI 不计算或发送本地文件 hash。本地上传事件不会包含签名 URL 或分片 ETag。任务和结果 JSON 中的上传来源会脱敏为 `upload:file`。
 
 ## 推荐工作流
 
@@ -334,11 +335,15 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 ## 来源边界
 
 - 喜马拉雅当前支持单集页和 `xima.tv` 短链；合集链接会返回 422，提示选择具体单集，不扣分钟、不创建转写任务。
+- Apple Podcasts 带有效 `?i=` 的单集链接保持原转写流程；节目主页会返回 422，提示选择具体单集。
+- 小宇宙 `/episode/:id` 保持原转写流程；`/podcast/:id` 播客主页会返回 422，提示选择具体单集。
 - 小红书图文笔记会返回不支持分支，不继续转写。
 - 抖音图文内容会返回不支持分支，不继续转写。
 - Twitter/X 只有视频推文可转写；文本 / 图片推文会返回 422，不扣分钟、不创建转写任务。
 - YouTube 如果命中可直接使用的字幕，会直接输出 TXT / SRT / VTT / JSON 结果，不扣分钟。
-- B 站支持普通 BV 页面、`b23.tv` 短链、带合法 `bvid` 的 `player.bilibili.com/player.html` 嵌入播放器链接，以及能由 Whisper 解出 BV 页面的 `bilibili://video/...` App 分享视频链接；CLI 只识别并透传原始 App 链接，不在本地解码或推导 BV；player 链接中 `p` 优先、`page` 兜底，`cid` 会被忽略，只有 `aid/cid` 的 player 链接不支持；`bilibili://space/...` 等非 video App 链接不支持。
+- B 站支持普通 BV 页面、分 P、`b23.tv` 短链、带合法 `bvid` 的 `player.bilibili.com/player.html` 嵌入播放器链接、能由 Whisper 解出 BV 页面的 `bilibili://video/...` App 分享视频链接，以及 Bangumi `ep`；CLI 只识别并透传原始 App 链接，不在本地解码或推导 BV；player 链接中 `p` 优先、`page` 兜底，`cid` 会被忽略，只有 `aid/cid` 的 player 链接不支持；`bilibili://space/...` 等非 video App 链接不支持。
+- B 站 Bangumi `ss` / `md` 和受支持的 UGC season / series 合集入口会返回 422，提示选择具体视频；CLI 不会枚举或展示合集视频清单。
+- Apple Podcasts 节目主页、小宇宙播客主页和 B 站合集的 422 都发生在任务复用、余额检查和分钟扣减之前，不扣分钟、不创建转写任务；不要把这些不支持响应当成临时错误自动重试。
 
 ## 故障排查
 
@@ -352,7 +357,6 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - 本地文件为空、不是普通文件或没有可转写音频轨：请用户换一个普通音频或视频文件。
 - 媒体检查失败、无音轨、无法读取时长或 ffprobe 失败：请用户换文件或先本地确认媒体可播放且包含音轨。
 - 上传分片遇到 403：通常是签名过期或上传签名异常；CLI 会重签并重试，仍失败时保留原始错误。
-- 上传后的文件 SHA-256 校验失败：重新选择文件再上传。
 - 任务创建后中断本地 CLI，不等于取消服务端任务；CLI 会提示“服务端转写仍在继续”或“服务端正在处理上传”。
 - 如果用户反馈没有进度更新，先确认 `deyo --help` 是否已经包含 `--progress-format`；如果没有，先升级 CLI。
 - 如果没有稳定正文事件，确认 `deyo --version` 至少是 `0.2.2`，且命令同时使用了最终 `text`、`--progress-format jsonl` 和 `--stream-transcript`。
@@ -360,6 +364,7 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - 如果中途丢失实时进度，留意 CLI 是否输出了“事件流中断，回退到轮询状态”的提示。
 - 如果任务创建后很快结束，优先判断是否是直接返回字幕的场景，而不是长时间转写链路。
 - 如果 B 站 player 链接只有 `aid` 或 `cid`，请用户提供普通 BV 页面 URL，或提供带 `bvid` 的 player 链接；如果是只有纯数字 aid 且 Whisper 无法解出 BV 页面的 `bilibili://video/...` App 链接，也请用户改用普通 BV 页面 URL。
+- 如果 Apple Podcasts 节目主页、小宇宙播客主页或 B 站合集返回 422，请用户在原平台打开具体单集或视频后重新提交，不要尝试把整套内容作为一个任务重试。
 - 如果 Twitter/X 链接返回“推文没有视频”，明确告诉用户当前只能转写视频推文，文本 / 图片推文只会展示基础信息。
 
 ## 在 Claude Code 中使用

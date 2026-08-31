@@ -46,6 +46,8 @@ A Deyo mention, ambient attachment, current directory, editor selection, clipboa
 
 Supported inputs are 8 link sources plus one local audio/video file upload.
 
+Transcribable inputs remain concrete episodes, videos, or single posts. Apple Podcasts show pages, Xiaoyuzhou podcast pages, and supported Bilibili Bangumi / UGC collection pages are recognized only to guide the user to a concrete episode or video; they cannot become whole-show or whole-collection transcription jobs.
+
 Supported link sources:
 
 - `xiaoyuzhou`
@@ -192,7 +194,6 @@ Clean YouTube subtitle-direct `text` before display; preserve subtitle-direct SR
 
 Local upload events:
 
-- `upload.hashing`
 - `upload.started`
 - `upload.progress`
 - `upload.completed`
@@ -215,7 +216,7 @@ Transcription task events:
 - `task.transcript.reset`
 - `task.transcript.completed`
 
-Local upload events do not include signed URLs, file hashes, or part ETags. Upload sources in task and result JSON are redacted as `upload:file`.
+File selection proceeds directly to `upload.started`; the CLI does not calculate or send a local file hash. Local upload events do not include signed URLs or part ETags. Upload sources in task and result JSON are redacted as `upload:file`.
 
 ## Recommended Workflow
 
@@ -334,11 +335,15 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 ## Source Boundaries
 
 - Ximalaya supports episode pages and `xima.tv` short links; album links return 422 asking for a concrete episode, do not consume minutes, and do not create transcription jobs.
+- Apple Podcasts episode links with a valid `?i=` keep the existing transcription flow; show pages return 422 asking for a concrete episode.
+- Xiaoyuzhou `/episode/:id` links keep the existing transcription flow; `/podcast/:id` pages return 422 asking for a concrete episode.
 - Xiaohongshu image notes return an unsupported branch and are not transcribed.
 - Douyin image posts return an unsupported branch and are not transcribed.
 - For Twitter/X, only video tweets can be transcribed; text/image tweets return 422, do not consume minutes, and do not create transcription jobs.
 - If YouTube has directly usable subtitles, the CLI outputs TXT / SRT / VTT / JSON directly without consuming minutes.
-- Bilibili supports normal BV pages, `b23.tv` short links, `player.bilibili.com/player.html` embed links when they include a valid `bvid`, and `bilibili://video/...` app video share links that Whisper can resolve to a standard BV page from `h5awaken.open_app_url`, base64 `h5awaken`, or a BV path segment; the CLI identifies app links and passes the original URL through without decoding `h5awaken` or deriving BV locally; for embed links, `p` wins over `page`, `cid` is ignored, and aid-only/cid-only player links are not supported; non-video app links such as `bilibili://space/...` are not supported.
+- Bilibili supports normal BV pages, parts, `b23.tv` short links, `player.bilibili.com/player.html` embed links when they include a valid `bvid`, app video share links that Whisper can resolve to a standard BV page, and Bangumi `ep`; the CLI identifies app links and passes the original URL through without decoding `h5awaken` or deriving BV locally; for embed links, `p` wins over `page`, `cid` is ignored, and aid-only/cid-only player links are not supported; non-video app links such as `bilibili://space/...` are not supported.
+- Bilibili Bangumi `ss` / `md` and supported UGC season / series collection pages return 422 asking for a concrete video. The CLI does not enumerate or display the collection's video list.
+- The Apple Podcasts show, Xiaoyuzhou podcast, and Bilibili collection 422 branches all happen before task reuse, balance checks, and minute deduction. They do not consume minutes or create transcription jobs; do not automatically retry these unsupported responses as transient errors.
 
 ## Troubleshooting
 
@@ -352,7 +357,6 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - Empty local files, non-regular files, and files without a transcribable audio track cannot be transcribed; ask the user for a regular audio or video file.
 - Media check failure, no audio track, unavailable duration, or ffprobe failure usually means the user should try another file or first verify locally that the media plays and contains an audio track.
 - A 403 while uploading parts usually means the signed upload URL expired or the upload signature failed; the CLI re-signs and retries, but if it still fails, preserve the raw error.
-- If uploaded file SHA-256 verification fails, ask the user to select the file again and retry.
 - Interrupting the local CLI after task creation does not cancel the server-side task; the CLI reports that server transcription is still running or the upload is still being processed.
 - If the user reports missing progress updates, verify that `deyo --help` includes `--progress-format`; if not, upgrade the published CLI first.
 - If stable transcript events are missing, require CLI `0.2.2+` and verify that final `text`, `--progress-format jsonl`, and `--stream-transcript` are all present.
@@ -360,6 +364,7 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 - If live progress stops mid-run, check whether the CLI emitted an SSE fallback notice.
 - If a task ends almost immediately, check whether it was a direct-subtitle-return case rather than a long transcription path.
 - If a Bilibili player link only has `aid` or `cid`, ask the user for the normal BV page URL or a player link that includes `bvid`; for an aid-only `bilibili://video/...` app link that Whisper cannot resolve to a BV page, also ask the user for the normal BV page URL.
+- If an Apple Podcasts show page, Xiaoyuzhou podcast page, or Bilibili collection returns 422, ask the user to open and submit a concrete episode or video instead of retrying the whole set as one task.
 - If a Twitter/X link reports that the tweet has no video, tell the user that only video tweets can be transcribed; text/image tweets only expose basic metadata.
 
 ## Use With Claude Code

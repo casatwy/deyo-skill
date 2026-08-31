@@ -63,7 +63,9 @@ npm install -g @casatwy/deyo@^0.2.0
 
 ## Inputs
 
-- Support `xiaoyuzhou`, `ximalaya`, `bilibili`, `douyin`, `xiaohongshu`, `youtube`, `apple-podcasts`, and `twitter` links.
+- Support `xiaoyuzhou`, `ximalaya`, `bilibili`, `douyin`, `xiaohongshu`, `youtube`, `apple-podcasts`, `twitter`, `tiktok`, `kankanews`, and `wechat_channels` links.
+- Treat an HTTPS URL as `kankanews` only when its lowercase hostname is exactly `kankanews.com` or ends with `.kankanews.com`. Keep known-platform checks ahead of this rule and keep `kankanews` ahead of generic direct-media handling. Use the canonical page URL returned by Deyo; never expose or preserve a media/CDN URL.
+- Transcribable inputs remain concrete episodes, videos, or single posts. Apple Podcasts show pages, Xiaoyuzhou podcast pages, and supported Bilibili Bangumi / UGC collection pages are recognized only to reject whole-show or whole-collection transcription and guide the user to a concrete episode or video.
 - Support one ordinary local audio/video file as source `upload`. Accept `deyo ./audio.mp3`, `deyo --file ./audio.mp3`, or `deyo -- ./audio.mp3`.
 - Add `--mime-type audio/*` or `--mime-type video/*` only when automatic detection is missing or wrong.
 - Do not pass directories, globs, stdin, special files, multiple files, batch queues, or resumable-upload expectations.
@@ -207,13 +209,19 @@ Progress/status remains on stderr. Upload JSON is redacted by the CLI/server so 
 
 ## Progress And Source Boundaries
 
-- Upload events include `upload.hashing`, `upload.started`, `upload.progress`, `upload.completed`, `upload.checking`, `upload.ready`, `upload.failed`, and `upload.aborted`.
+- Upload events include `upload.started`, `upload.progress`, `upload.completed`, `upload.checking`, `upload.ready`, `upload.failed`, and `upload.aborted`. File selection proceeds directly to `upload.started`; the CLI does not calculate or send a local file hash.
 - Task events include `task.created`, `task.status_changed`, `task.progress`, transcript events, `task.completed`, `task.failed`, `task.cancelled`, `task.result_written`, and `task.notice`.
 - Surface upload progress, media inspection, task creation, consumed/remaining minutes when present, status changes, key percentages, fallback notices, completion, cancellation, and the final path.
 - If `task.created` reports `mode: "subtitles"` or `resultReady: true`, explain that usable subtitles were found and no long paid transcription is needed.
 - YouTube subtitle-direct tasks do not consume minutes. Full link/upload transcription consumes minutes after job creation or reuse.
 - Douyin image/text posts, Xiaohongshu image notes, Twitter/X text/image tweets, and Ximalaya albums do not proceed to transcription. Ask for a supported video, tweet, or episode as appropriate.
-- Apple Podcasts requires a `podcasts.apple.com` episode link with `?i=`.
+- Kankanews requires an HTTPS page whose lowercase hostname is exactly `kankanews.com` or a true dot-boundary subdomain ending in `.kankanews.com`; the page must resolve to a transcribable video. Do not ask for, display, or retain any internal MP4/CDN URL.
+- Apple Podcasts show pages without a valid episode `?i=` return HTTP 422. Ask for a concrete `podcasts.apple.com` episode link with a valid `?i=`; do not retry the show page as a paid task.
+- Xiaoyuzhou `/podcast/:id` pages return HTTP 422. Ask for a concrete `/episode/:id` link.
+- Bilibili Bangumi `ss` / `md` and supported UGC season / series collection pages return HTTP 422. Ask for a concrete BV, part, player, app-video, or Bangumi `ep` link. Do not enumerate or present the collection's video list.
+- A Bilibili trial video is a special concrete video with only a shorter official media segment available. The CLI must show the full duration, transcribable duration, expected minute deduction, and the warning `这是B站专属视频，Deyo 只能转写试看部分`, then obtain the current user's explicit interactive `y` confirmation. Never answer the prompt on the user's behalf. Refusal and non-TTY execution must stop without creating a task or deducting minutes. Billing uses only the transcribable duration.
+- A paid or charge-exclusive Bilibili video with no usable trial media still returns HTTP 422. Do not retry it as a forced transcription.
+- These three 422 branches happen before task reuse, balance checks, and minute deduction. They do not consume minutes or create transcription jobs; preserve the server's unsupported response instead of treating it as a transient failure.
 
 ## Interruptions And Failures
 
