@@ -250,11 +250,15 @@ if (args[0] === 'skill' && args[1] === 'verify') {
 if (args.includes('install') && args.includes('--workdir')) {
   const workdir = args[args.indexOf('--workdir') + 1]
   const directory = args[args.indexOf('--dir') + 1]
-  const target = path.join(workdir, directory, 'deyo')
+  const target = process.env.MOCK_CLAWHUB_LEGACY_INSTALL === '1'
+    ? path.join(workdir, directory, 'deyo')
+    : path.join(workdir, directory, '@casatwy', 'deyo')
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.cpSync(snapshotPath, target, { recursive: true, dereference: false })
   fs.mkdirSync(path.join(target, '.clawhub'), { recursive: true })
   fs.writeFileSync(path.join(target, '.clawhub', 'origin.json'), '{}')
+  fs.writeFileSync(path.join(target, '_meta.json'), '{}')
+  fs.writeFileSync(path.join(target, 'skill-card.md'), '# Generated Skill Card\\n')
   process.exit(0)
 }
 process.stderr.write('unexpected clawhub command: ' + args.join(' ') + '\\n')

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { chmod, cp, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -1212,8 +1212,29 @@ async function isolatedInstallAndVerify(state, localFingerprint) {
       'install', officialRef,
       '--version', state.targetVersion,
     ], { timeoutMs: NETWORK_TIMEOUT_MS })
-    const installed = path.join(temporary, 'skills', 'deyo')
-    const fingerprint = (await clawHubFileFingerprint(installed)).filter(file => !file.path.startsWith('.clawhub/'))
+    const installCandidates = [
+      path.join(temporary, 'skills', 'deyo'),
+      path.join(temporary, 'skills', '@casatwy', 'deyo'),
+    ]
+    const installedCandidates = []
+    for (const candidate of installCandidates) {
+      try {
+        if ((await lstat(candidate)).isDirectory()) installedCandidates.push(candidate)
+      }
+      catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+    }
+    if (installedCandidates.length !== 1) {
+      throw new ClawHubConflictError(
+        `Isolated ClawHub install resolved ${installedCandidates.length} recognized skill directories`,
+      )
+    }
+    const fingerprint = (await clawHubFileFingerprint(installedCandidates[0])).filter(file => (
+      file.path !== '_meta.json' &&
+      file.path !== 'skill-card.md' &&
+      !file.path.startsWith('.clawhub/')
+    ))
     if (!compareFingerprints(localFingerprint, fingerprint)) throw new ClawHubConflictError('Isolated ClawHub install fingerprint mismatch')
   }
   finally {
