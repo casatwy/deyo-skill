@@ -129,6 +129,15 @@ export function fixForwardConfirmationPhrase(targetVersion, nextTarget) {
   return `fix-forward deyo v${targetVersion} to v${nextTarget}`
 }
 
+export function supersedeConfirmationPhrase(targetVersion, nextTarget) {
+  assertStableSemver(targetVersion, 'target version')
+  assertStableSemver(nextTarget, 'next target version')
+  if (incrementPatch(targetVersion) !== nextTarget) {
+    throw new Error('Supersede target must be the next patch')
+  }
+  return `supersede deyo v${targetVersion} for v${nextTarget}`
+}
+
 export function phaseAtLeast(state, phase) {
   const currentIndex = RELEASE_PHASES.indexOf(state?.phase)
   const targetIndex = RELEASE_PHASES.indexOf(phase)
@@ -252,6 +261,23 @@ export function validateTerminalFixForwardState(state) {
   return validated
 }
 
+export function validateCleanSupersedeState(state) {
+  return validateTerminalFixForwardState(state)
+}
+
+export function assertStrictAncestor(ancestorCommit, descendantCommit, isAncestor) {
+  if (!/^[a-f0-9]{40}$/.test(ancestorCommit ?? '') || !/^[a-f0-9]{40}$/.test(descendantCommit ?? '')) {
+    throw new Error('Strict ancestor check requires full commit hashes')
+  }
+  if (ancestorCommit === descendantCommit) {
+    throw new Error('Frozen release commit must be a strict ancestor of current master')
+  }
+  if (isAncestor !== true) {
+    throw new Error('Frozen release commit is not an ancestor of current master')
+  }
+  return true
+}
+
 export function isReleasePathAllowed(relativePath) {
   const normalized = relativePath.replaceAll('\\', '/').replace(/^\.\//, '')
   if (!normalized || normalized.startsWith('../') || normalized.includes('/../')) return false
@@ -284,6 +310,18 @@ export function reconcileResumeGitState(state, context) {
   const recovered = { ...validateReleaseState(state) }
   const expectedSubject = `release(skill): v${recovered.targetVersion}`
   const expectedRemoteBase = recovered.remoteBaseCommit ?? recovered.baseCommit
+
+  if (
+    recovered.phase === 'tag_pushed' &&
+    context.localHead === context.remoteMaster &&
+    context.localHead !== recovered.releaseCommit &&
+    context.releaseCommitIsAncestor === true
+  ) {
+    throw new Error(
+      'Current master advanced from the immutable clean release commit with a new canonical tree; ' +
+      'RESUME=1 cannot recover it. Run make supersede.',
+    )
+  }
 
   if (!phaseAtLeast(recovered, 'committed')) {
     if (context.localHead !== recovered.baseCommit) {

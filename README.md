@@ -488,6 +488,18 @@ make abort
 
 中止不会修改工作树、Git 远端或 ClawHub。Active state 会通过同文件系统原子 rename 归档到私有的 `.git/deyo-release/aborted/`，同时记录原 state、中止时间、原因和当前 source snapshot。不要手工删除 state，也不要修改 frozen snapshot 后尝试 `RESUME=1`。中止成功后，普通 `make publish` 会重新枚举 ClawHub；如果最高不可变版本和目标占用状态没有变化，会重新冻结同一个 patch 版本。
 
+## 维护者：clean release supersede
+
+`abort` 只处理尚未产生不可变发布物的 `frozen` state；`fix-forward` 只处理 ClawHub security 终态失败。若不可变版本已经成功发布并通过 pass/clean，但没有 success receipt，随后同一条 `master` 已用新的 canonical 内容严格快进，则普通 `RESUME=1` 会保持拒绝并提示：
+
+```bash
+make supersede
+```
+
+该命令只接受无成功 receipt 的 `tag_pushed` state，并在确认前后完整核对 official origin/upstream、local 与 remote master 相同、旧 release commit 是当前 master 的严格祖先、local/remote tag 与 tag archive hash、ClawHub 精确版本与 fingerprint、`latest`、pass/clean verification、下一 patch 未占用，以及当前 canonical snapshot 确实不同且确认期间未漂移。CI、非交互终端或任一证据不一致都会硬停止。确认短语固定为 `supersede deyo v<旧版本> for v<下一 patch>`。
+
+成功后只把 active state 通过同文件系统原子 rename 归档到私有 `.git/deyo-release/superseded/`。Audit 保存旧 state、Git/tag/ClawHub 证据、当前 source snapshot、下一目标和 `master_advanced_with_new_canonical_tree` 原因；不为旧版本补写 success receipt，也不修改工作树、Git refs、远端或 ClawHub。随后运行普通 `make publish` 发布下一 patch。
+
 ## 维护者：terminal security fix-forward
 
 只有发布已精确停在 `tag_pushed`，ClawHub 不可变精确版本存在且 `latest` 指向该版本、artifact 与 tag archive 完全一致、远端 `master` 仍停在发布前基线，并且 ClawHub verification 的唯一终态失败是 `security.status_not_clean` 时，才可运行：

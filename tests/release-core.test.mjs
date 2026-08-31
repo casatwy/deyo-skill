@@ -8,6 +8,7 @@ import {
   allocateTargetVersion,
   assertClawHubReady,
   assertReleasePathsAllowed,
+  assertStrictAncestor,
   assertTargetAbsent,
   clawHubFileFingerprint,
   ClawHubConflictError,
@@ -19,10 +20,12 @@ import {
   incrementPatch,
   reconcileResumeGitState,
   sha256,
+  supersedeConfirmationPhrase,
   validateOriginUrl,
   validateRemoteConfiguration,
   validateReleaseNotes,
   validateFrozenAbortState,
+  validateCleanSupersedeState,
   validateReleaseState,
   validateTerminalFixForwardState,
 } from '../scripts/release-core.mjs'
@@ -84,19 +87,45 @@ test('target reservation and resume state never allocate another patch', () => {
 })
 
 test('release options forbid overrides and incompatible modes', () => {
-  assert.deepEqual(parseReleaseOptions([]), { abort: false, dryRun: false, fixForward: false, resume: false })
-  assert.deepEqual(parseReleaseOptions(['--dry-run']), { abort: false, dryRun: true, fixForward: false, resume: false })
-  assert.deepEqual(parseReleaseOptions(['--resume']), { abort: false, dryRun: false, fixForward: false, resume: true })
-  assert.deepEqual(parseReleaseOptions(['--abort']), { abort: true, dryRun: false, fixForward: false, resume: false })
-  assert.deepEqual(parseReleaseOptions(['--fix-forward']), { abort: false, dryRun: false, fixForward: true, resume: false })
+  assert.deepEqual(parseReleaseOptions([]), { abort: false, dryRun: false, fixForward: false, resume: false, supersede: false })
+  assert.deepEqual(parseReleaseOptions(['--dry-run']), { abort: false, dryRun: true, fixForward: false, resume: false, supersede: false })
+  assert.deepEqual(parseReleaseOptions(['--resume']), { abort: false, dryRun: false, fixForward: false, resume: true, supersede: false })
+  assert.deepEqual(parseReleaseOptions(['--abort']), { abort: true, dryRun: false, fixForward: false, resume: false, supersede: false })
+  assert.deepEqual(parseReleaseOptions(['--fix-forward']), { abort: false, dryRun: false, fixForward: true, resume: false, supersede: false })
+  assert.deepEqual(parseReleaseOptions(['--supersede']), { abort: false, dryRun: false, fixForward: false, resume: false, supersede: true })
   assert.throws(() => parseReleaseOptions(['--dry-run', '--resume']), /cannot be combined/)
   assert.throws(() => parseReleaseOptions(['--abort', '--resume']), /cannot be combined/)
   assert.throws(() => parseReleaseOptions(['--fix-forward', '--resume']), /cannot be combined/)
+  assert.throws(() => parseReleaseOptions(['--supersede', '--resume']), /cannot be combined/)
   assert.throws(() => parseReleaseOptions(['--version', '1.2.3']), /Unknown release option/)
   assert.equal(isCiEnvironment({ CI: 'true' }), true)
   assert.equal(isCiEnvironment({ GITHUB_ACTIONS: '1' }), true)
   assert.equal(isCiEnvironment({ CI: 'false' }), false)
   assert.equal(isCiEnvironment({}), false)
+})
+
+test('clean supersede validation, confirmation, and strict ancestry fail closed', () => {
+  const notes = 'notes\n'
+  const state = {
+    schema: 1,
+    phase: 'tag_pushed',
+    baseVersion: '1.0.10',
+    targetVersion: '1.0.11',
+    baseCommit: 'b'.repeat(40),
+    sourceSnapshot: 'a'.repeat(64),
+    canonicalTreeHash: 'c'.repeat(64),
+    releaseCommit: 'd'.repeat(40),
+    tag: 'v1.0.11',
+    releaseNotes: notes,
+    releaseNotesHash: sha256(notes),
+  }
+  assert.equal(validateCleanSupersedeState(state), state)
+  assert.equal(supersedeConfirmationPhrase('1.0.11', '1.0.12'), 'supersede deyo v1.0.11 for v1.0.12')
+  assert.throws(() => supersedeConfirmationPhrase('1.0.11', '1.0.13'), /next patch/)
+  assert.throws(() => validateCleanSupersedeState({ ...state, phase: 'tagged' }), /tag_pushed/)
+  assert.equal(assertStrictAncestor(state.releaseCommit, 'e'.repeat(40), true), true)
+  assert.throws(() => assertStrictAncestor(state.releaseCommit, state.releaseCommit, true), /strict ancestor/)
+  assert.throws(() => assertStrictAncestor(state.releaseCommit, 'e'.repeat(40), false), /not an ancestor/)
 })
 
 test('terminal fix-forward validation is limited to a complete tag_pushed state', () => {
@@ -201,6 +230,13 @@ test('resume recovers only exact commit and master-push crash windows', () => {
     localHead: releaseCommit,
     remoteMaster: 'f'.repeat(40),
   }), /origin\/master changed/)
+
+  const advanced = { ...clawhubReady, phase: 'tag_pushed' }
+  assert.throws(() => reconcileResumeGitState(advanced, {
+    localHead: 'f'.repeat(40),
+    remoteMaster: 'f'.repeat(40),
+    releaseCommitIsAncestor: true,
+  }), /make supersede/)
 
   const fixForwardPrepared = {
     ...prepared,

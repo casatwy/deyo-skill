@@ -237,6 +237,10 @@ if (args[0] === 'skill' && args[1] === 'verify') {
     decision: 'review',
     security: { passed: false, status: 'pending' },
   } : {
+    slug: 'deyo',
+    publisherHandle: 'casatwy',
+    version: args[args.indexOf('--version') + 1],
+    resolvedFrom: 'version',
     ok: true,
     decision: 'pass',
     security: { passed: true, status: 'clean' },
@@ -298,6 +302,9 @@ const runtime = {
   confirm: async (expected) => {
     if (process.env.MOCK_CONFIRM !== expected) {
       throw new Error('simulated confirmation mismatch: expected ' + expected)
+    }
+    if (process.env.MOCK_CONFIRM_MUTATE_SOURCE === '1') {
+      await import('node:fs/promises').then(fs => fs.appendFile('deyo/SKILL.md', '\\n<!-- confirmation drift -->\\n'))
     }
   },
 }
@@ -387,6 +394,7 @@ async function createFixture() {
     statePath: path.join(repo, '.git', 'deyo-release', 'state.json'),
     abortedDirectory: path.join(repo, '.git', 'deyo-release', 'aborted'),
     abandonedDirectory: path.join(repo, '.git', 'deyo-release', 'abandoned'),
+    supersededDirectory: path.join(repo, '.git', 'deyo-release', 'superseded'),
     receiptPath: path.join(repo, '.git', 'deyo-release', 'receipts', 'v1.0.9.json'),
     receiptPathFor(version) {
       return path.join(repo, '.git', 'deyo-release', 'receipts', `v${version}.json`)
@@ -499,6 +507,27 @@ async function createFixForwardAheadFrozenRelease(fixture) {
   assert.equal(frozen.remoteBaseCommit, remoteBase)
   await writeFile(path.join(fixture.repo, 'tests', 'after-fix-forward-freeze.txt'), 'fixed after freeze\n')
   return { failed, frozen, remoteBase }
+}
+
+async function createCleanAdvancedRelease(fixture) {
+  const pending = await fixture.formal([], {
+    MOCK_CONFIRM: 'publish deyo v1.0.9',
+    MOCK_CLAWHUB_VERIFY: 'pending',
+    MOCK_REVIEW_TIMEOUT_MS: '0',
+  })
+  assert.equal(pending.code, 1)
+  const state = await readJson(fixture.statePath)
+  assert.equal(state.phase, 'tag_pushed')
+  await fixture.git(['push', 'origin', `${state.releaseCommit}:refs/heads/master`])
+
+  const canonicalPath = path.join(fixture.repo, 'deyo', 'SKILL.md')
+  await writeFile(canonicalPath, `${await readFile(canonicalPath, 'utf8')}\n<!-- later canonical change -->\n`)
+  await writeFile(path.join(fixture.repo, 'release', 'next.md'), '# Next clean release\n\n- Publish later canonical content.\n')
+  await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: fixture.repo, env: process.env })
+  await fixture.git(['add', '-A'])
+  await fixture.git(['commit', '-m', 'later canonical content'])
+  await fixture.git(['push', 'origin', 'master'])
+  return state
 }
 
 test('release dry-run computes 1.0.9 and performs zero repository writes', { timeout: 30_000 }, async () => {
@@ -1087,5 +1116,125 @@ test('clawhub-ready resume rejects projection evidence drift before activating m
   }
   finally {
     await fixture.cleanup()
+  }
+})
+
+test('clean published release with later canonical master requires supersede, archives only state, then publishes next patch once', { timeout: 90_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const oldState = await createCleanAdvancedRelease(fixture)
+    const resumed = await fixture.formal(['--resume'], { MOCK_CONFIRM: 'resume deyo v1.0.9' })
+    assert.equal(resumed.code, 1)
+    assert.match(resumed.stderr, /Run make supersede/)
+
+    const localBefore = (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()
+    const remoteBefore = (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim()
+    const oldTagBefore = (await fixture.git(['rev-parse', 'refs/tags/v1.0.9^{}'])).stdout.trim()
+    const clawHubBefore = await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'published.json'), 'utf8')
+    const superseded = await fixture.formal(['--supersede'], {
+      MOCK_CONFIRM: 'supersede deyo v1.0.9 for v1.0.10',
+    })
+    assert.equal(superseded.code, 0, superseded.stderr)
+    assert.match(superseded.stderr, /\[release\] MODE supersede/)
+    assert.match(superseded.stderr, /OK Archive clean superseded release state/)
+    const auditResult = JSON.parse(superseded.stdout.trim().split('\n').at(-1))
+    assert.equal(auditResult.kind, 'deyo.clean-release-supersede')
+    assert.equal(auditResult.reason, 'master_advanced_with_new_canonical_tree')
+    assert.equal(auditResult.nextTarget, '1.0.10')
+    assert.equal(auditResult.state.releaseCommit, oldState.releaseCommit)
+    assert.notEqual(auditResult.currentSourceSnapshot, oldState.sourceSnapshot)
+    assert.equal(auditResult.clawHub.latest, '1.0.9')
+    assert.equal(auditResult.clawHub.verification.security.status, 'clean')
+    assert.equal((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim(), localBefore)
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), remoteBefore)
+    assert.equal((await fixture.git(['rev-parse', 'refs/tags/v1.0.9^{}'])).stdout.trim(), oldTagBefore)
+    assert.equal(await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'published.json'), 'utf8'), clawHubBefore)
+    await assertMissing(fixture.statePath)
+    await assertMissing(fixture.receiptPathFor('1.0.9'))
+    const archives = await readdir(fixture.supersededDirectory)
+    assert.equal(archives.length, 1)
+    const archivedState = await readJson(path.join(fixture.supersededDirectory, archives[0], 'state.json'))
+    assert.deepEqual(archivedState, oldState)
+
+    const released = await fixture.formal([], { MOCK_CONFIRM: 'publish deyo v1.0.10' })
+    assert.equal(released.code, 0, released.stderr)
+    const receipt = JSON.parse(released.stdout.trim().split('\n').at(-1))
+    assert.equal(receipt.skillVersion, '1.0.10')
+    const commands = (await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'commands.log'), 'utf8'))
+      .trim().split('\n').map(line => JSON.parse(line))
+    assert.equal(commands.filter(args => args[0] === 'publish' && !args.includes('--dry-run') && args.includes('1.0.9')).length, 1)
+    assert.equal(commands.filter(args => args[0] === 'publish' && !args.includes('--dry-run') && args.includes('1.0.10')).length, 1)
+    assert.equal((await fixture.git(['rev-parse', 'refs/tags/v1.0.9^{}'])).stdout.trim(), oldState.releaseCommit)
+    assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), receipt.releaseCommit)
+  }
+  finally {
+    await fixture.cleanup()
+  }
+})
+
+test('clean supersede rejects state, evidence, environment, confirmation, and confirmation-time drift', { timeout: 240_000 }, async (t) => {
+  const scenarios = [
+    {
+      name: 'phase',
+      expected: /Only a tag_pushed release/,
+      mutate: async (fixture) => {
+        const state = await readJson(fixture.statePath)
+        await writeFile(fixture.statePath, `${JSON.stringify({ ...state, phase: 'tagged' }, null, 2)}\n`)
+      },
+    },
+    {
+      name: 'success receipt',
+      expected: /success receipt/,
+      mutate: async (fixture) => {
+        await mkdir(path.dirname(fixture.receiptPathFor('1.0.9')), { recursive: true })
+        await writeFile(fixture.receiptPathFor('1.0.9'), '{}\n')
+      },
+    },
+    {
+      name: 'local remote mismatch',
+      expected: /local master and origin\/master are identical/,
+      mutate: async (fixture) => {
+        await writeFile(path.join(fixture.repo, 'release', 'next.md'), '# local only\n')
+        await fixture.git(['add', 'release/next.md'])
+        await fixture.git(['commit', '-m', 'local only'])
+      },
+    },
+    {
+      name: 'tag mismatch',
+      expected: /Local tag .* frozen release commit/,
+      mutate: async (fixture) => { await fixture.git(['tag', '-f', 'v1.0.9', 'HEAD']) },
+    },
+    { name: 'fingerprint', expected: /different artifact fingerprint/, env: { MOCK_CLAWHUB_FINGERPRINT_MISMATCH: '1' } },
+    { name: 'latest', expected: /latest is not/, env: { MOCK_CLAWHUB_LATEST: '1.0.8' } },
+    { name: 'security', expected: /verification has not passed/, env: { MOCK_CLAWHUB_VERIFY: 'pending' } },
+    { name: 'next occupied', expected: /next patch .* already exists/, env: { MOCK_CLAWHUB_NEXT_CONFLICT: '1.0.10' } },
+    { name: 'confirmation', expected: /confirmation mismatch/, confirm: 'wrong' },
+    { name: 'non tty', expected: /interactive TTY/, cli: true },
+    { name: 'ci', expected: /forbidden in CI/, env: { CI: 'true' } },
+    { name: 'confirmation source drift', expected: /Release source changed|source does not differ/i, env: { MOCK_CONFIRM_MUTATE_SOURCE: '1' } },
+  ]
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const fixture = await createFixture()
+      try {
+        await createCleanAdvancedRelease(fixture)
+        if (scenario.mutate) await scenario.mutate(fixture)
+        const env = {
+          MOCK_CONFIRM: scenario.confirm || 'supersede deyo v1.0.9 for v1.0.10',
+          ...scenario.env,
+        }
+        const result = scenario.cli
+          ? await fixture.cli(['--supersede'], env)
+          : await fixture.formal(['--supersede'], env)
+        assert.equal(result.code, 1)
+        assert.match(result.stderr, scenario.expected)
+        await access(fixture.statePath)
+        await assertMissing(fixture.supersededDirectory)
+      }
+      finally {
+        await fixture.cleanup()
+      }
+    })
   }
 })

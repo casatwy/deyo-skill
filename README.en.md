@@ -488,6 +488,18 @@ This command is separate from normal `publish` and `RESUME=1`. It rechecks the o
 
 Aborting does not change the worktree, Git remotes, or ClawHub. The active state is atomically renamed on the same filesystem into private storage under `.git/deyo-release/aborted/`, with the original state, abort time, reason, and current source snapshot recorded. Do not delete state manually or edit a frozen snapshot and attempt `RESUME=1`. After a successful abort, normal `make publish` enumerates ClawHub again and freezes the same patch when the immutable maximum and target reservation remain unchanged.
 
+## Maintainers: Supersede A Clean Release
+
+`abort` is only for a `frozen` state with no immutable release artifact; `fix-forward` is only for a terminal ClawHub security failure. If an immutable version was published successfully and reached pass/clean without a success receipt, then the same `master` advanced strictly with new canonical content, normal `RESUME=1` remains fail-closed and points to:
+
+```bash
+make supersede
+```
+
+This command accepts only a receipt-free `tag_pushed` state. Before and after confirmation it checks the official origin/upstream, identical local and remote master, the old release commit as a strict ancestor of current master, local and remote tags plus the tag archive hash, the exact ClawHub version and fingerprint, `latest`, pass/clean verification, an unoccupied next patch, and a changed canonical snapshot that remains stable during confirmation. CI, a non-interactive terminal, or any evidence mismatch stops the command. The exact confirmation phrase is `supersede deyo v<old version> for v<next patch>`.
+
+On success, only the active state is atomically renamed on the same filesystem into private `.git/deyo-release/superseded/` storage. The audit preserves the old state, Git/tag/ClawHub evidence, current source snapshot, next target, and reason `master_advanced_with_new_canonical_tree`. It does not synthesize an old success receipt or modify the worktree, Git refs, remotes, or ClawHub. Run normal `make publish` afterward to publish the next patch.
+
 ## Maintainers: Terminal Security Fix-Forward
 
 Run this only when a release is exactly `tag_pushed`, the immutable ClawHub exact version and `latest` both resolve to it, its artifact exactly matches the tag archive, remote `master` is still at the pre-release base, and the sole terminal ClawHub verification failure is `security.status_not_clean`:

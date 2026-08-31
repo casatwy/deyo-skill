@@ -12,6 +12,7 @@ import {
   allocateTargetVersion,
   assertClawHubReady,
   assertReleasePathsAllowed,
+  assertStrictAncestor,
   assertStableSemver,
   assertTargetAbsent,
   clawHubFileFingerprint,
@@ -25,6 +26,8 @@ import {
   reconcileResumeGitState,
   remoteFileFingerprint,
   sha256,
+  supersedeConfirmationPhrase,
+  validateCleanSupersedeState,
   validateRemoteConfiguration,
   validateReleaseNotes,
   validateFrozenAbortState,
@@ -50,6 +53,7 @@ const statePath = path.join(recoveryDirectory, 'state.json')
 const receiptsDirectory = path.join(recoveryDirectory, 'receipts')
 const abortedDirectory = path.join(recoveryDirectory, 'aborted')
 const abandonedDirectory = path.join(recoveryDirectory, 'abandoned')
+const supersededDirectory = path.join(recoveryDirectory, 'superseded')
 const officialRef = '@casatwy/deyo'
 const NETWORK_TIMEOUT_MS = 30_000
 const CLAWHUB_LICENSE = 'MIT-0'
@@ -63,17 +67,18 @@ export function isCiEnvironment(environment = process.env) {
 }
 
 export function parseReleaseOptions(argv) {
-  const known = new Set(['--abort', '--dry-run', '--fix-forward', '--resume'])
+  const known = new Set(['--abort', '--dry-run', '--fix-forward', '--resume', '--supersede'])
   for (const value of argv) if (!known.has(value)) throw new Error(`Unknown release option: ${value}`)
   if (new Set(argv).size !== argv.length) throw new Error('Release options must not be repeated')
   const dryRun = argv.includes('--dry-run')
   const resume = argv.includes('--resume')
   const abort = argv.includes('--abort')
   const fixForward = argv.includes('--fix-forward')
-  if ([dryRun, resume, abort, fixForward].filter(Boolean).length > 1) {
-    throw new Error('--abort, --dry-run, --fix-forward, and --resume cannot be combined')
+  const supersede = argv.includes('--supersede')
+  if ([dryRun, resume, abort, fixForward, supersede].filter(Boolean).length > 1) {
+    throw new Error('--abort, --dry-run, --fix-forward, --resume, and --supersede cannot be combined')
   }
-  return { abort, dryRun, fixForward, resume }
+  return { abort, dryRun, fixForward, resume, supersede }
 }
 
 async function command(commandName, args, options = {}) {
@@ -448,6 +453,26 @@ async function fullPreflight({ resume, state }) {
     recoveredState = await progressStage('Reconcile recovery Git state', async () => {
       let localHeadParent = null
       let localHeadSubject = null
+      let releaseCommitIsAncestor = false
+      const hasSuccessReceipt = Boolean(
+        await readJsonIfPresent(path.join(receiptsDirectory, `v${recoveredState.targetVersion}.json`)),
+      )
+      const currentCanonicalTreeHash = await hashTree(path.join(root, 'deyo'))
+      if (
+        recoveredState.phase === 'tag_pushed' &&
+        !hasSuccessReceipt &&
+        localHead === remoteMaster &&
+        localHead !== recoveredState.releaseCommit &&
+        currentCanonicalTreeHash !== recoveredState.canonicalTreeHash
+      ) {
+        const ancestor = await git(
+          ['merge-base', '--is-ancestor', recoveredState.releaseCommit, localHead],
+          { allowFailure: true },
+        )
+        if (![0, 1].includes(ancestor.code)) throw new Error('Could not prove the frozen release ancestry')
+        releaseCommitIsAncestor = ancestor.code === 0
+        if (releaseCommitIsAncestor) currentProgressReporter()?.setRecovery('tag_pushed', 'make supersede')
+      }
       if (!phaseAtLeast(recoveredState, 'committed') && localHead !== recoveredState.baseCommit) {
         localHeadParent = (await git(['rev-parse', `${localHead}^`])).stdout.trim()
         localHeadSubject = (await git(['show', '-s', '--format=%s', localHead])).stdout.trim()
@@ -457,6 +482,7 @@ async function fullPreflight({ resume, state }) {
         localHeadParent,
         localHeadSubject,
         remoteMaster,
+        releaseCommitIsAncestor,
       })
     })
   }
@@ -517,10 +543,10 @@ async function confirm(targetVersion, resume, runtime = {}) {
 function assertFormalEnvironment(runtime = {}) {
   const environment = runtime.environment ?? process.env
   if (isCiEnvironment(environment)) {
-    throw new Error('Formal Skill publishing, abort, and fix-forward are forbidden in CI environments')
+    throw new Error('Formal Skill publishing, abort, fix-forward, and supersede are forbidden in CI environments')
   }
   const interactive = runtime.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
-  if (!interactive) throw new Error('Formal Skill publishing, abort, and fix-forward require an interactive TTY')
+  if (!interactive) throw new Error('Formal Skill publishing, abort, fix-forward, and supersede require an interactive TTY')
 }
 
 async function confirmAbort(targetVersion, runtime = {}) {
@@ -813,6 +839,191 @@ async function fixForwardTerminalRelease(state, runtime = {}) {
   }
   return await progressStage('Archive terminal fix-forward state', async () => (
     await archiveTerminalFixForward(state, final)
+  ))
+}
+
+function cleanSupersedeEvidence(verification, targetVersion) {
+  const security = verification?.security
+  if (
+    verification?.slug !== 'deyo' ||
+    verification?.publisherHandle !== 'casatwy' ||
+    verification?.version !== targetVersion ||
+    verification?.resolvedFrom !== 'version' ||
+    verification?.ok !== true ||
+    verification?.decision !== 'pass' ||
+    security?.passed !== true ||
+    security?.status !== 'clean'
+  ) {
+    throw new Error(`Supersede requires exact @casatwy/deyo@${targetVersion} pass/clean verification`)
+  }
+  return JSON.parse(JSON.stringify({
+    slug: verification.slug,
+    publisherHandle: verification.publisherHandle,
+    version: verification.version,
+    resolvedFrom: verification.resolvedFrom,
+    decision: verification.decision,
+    security,
+  }))
+}
+
+async function cleanSupersedePreflight(state) {
+  const frozen = validateCleanSupersedeState(state)
+  await assertGitPreflight()
+  await assertLocalTooling()
+  if (await readJsonIfPresent(path.join(receiptsDirectory, `v${frozen.targetVersion}.json`))) {
+    throw new Error(`Cannot supersede a release with a success receipt for v${frozen.targetVersion}`)
+  }
+
+  const localHead = (await git(['rev-parse', 'HEAD'])).stdout.trim()
+  const remoteMaster = await remoteMasterCommit()
+  if (localHead !== remoteMaster) {
+    throw new Error('Cannot supersede unless local master and origin/master are identical')
+  }
+  const ancestor = await git(['merge-base', '--is-ancestor', frozen.releaseCommit, localHead], { allowFailure: true })
+  if (![0, 1].includes(ancestor.code)) throw new Error('Could not prove the frozen release ancestry')
+  assertStrictAncestor(frozen.releaseCommit, localHead, ancestor.code === 0)
+
+  const tag = await tagEvidence(frozen)
+  const inspect = await inspectVersions()
+  const allocation = allocateTargetVersion(inspect)
+  const nextTarget = allocation.targetVersion
+  if (allocation.baseVersion !== frozen.targetVersion) {
+    throw new Error(`Cannot supersede because ClawHub highest version is ${allocation.baseVersion}, not ${frozen.targetVersion}`)
+  }
+  if (inspect.skill?.tags?.latest !== frozen.targetVersion) {
+    throw new Error(`Cannot supersede because ClawHub latest is not ${frozen.targetVersion}`)
+  }
+  const exact = await inspectExact(frozen.targetVersion)
+  if (exact?.version?.version !== frozen.targetVersion) {
+    throw new Error(`Cannot supersede because ClawHub exact ${frozen.targetVersion} is unavailable`)
+  }
+  const remoteFingerprint = remoteFileFingerprint(exact)
+  if (!compareFingerprints(tag.fingerprint, remoteFingerprint)) {
+    throw new Error(`Cannot supersede because ClawHub ${frozen.targetVersion} has a different artifact fingerprint`)
+  }
+  if (
+    Object.hasOwn(frozen, 'clawHubFileFingerprint') &&
+    !compareFingerprints(frozen.clawHubFileFingerprint, tag.fingerprint)
+  ) {
+    throw new Error('Cannot supersede because the frozen file fingerprint differs from the tagged artifact')
+  }
+  const verification = await verifyExact(frozen.targetVersion)
+  assertClawHubReady(exact, verification, frozen.targetVersion, tag.fingerprint)
+  const cleanSecurity = cleanSupersedeEvidence(verification, frozen.targetVersion)
+  if (await inspectExact(nextTarget)) {
+    throw new Error(`Cannot supersede because next patch ${nextTarget} already exists`)
+  }
+  const currentSourceSnapshot = await sourceSnapshot(frozen.targetVersion, nextTarget)
+  const currentCanonicalTreeHash = await hashTree(path.join(root, 'deyo'))
+  if (currentCanonicalTreeHash === frozen.canonicalTreeHash) {
+    throw new Error('Cannot supersede because current canonical tree does not differ from the frozen release')
+  }
+  if (currentSourceSnapshot === frozen.sourceSnapshot) {
+    throw new Error('Cannot supersede because current canonical source does not differ from the frozen release')
+  }
+
+  return {
+    state: frozen,
+    localHead,
+    remoteMaster,
+    currentSourceSnapshot,
+    currentCanonicalTreeHash,
+    nextTarget,
+    tag,
+    clawHub: {
+      latest: inspect.skill.tags.latest,
+      exactVersion: exact.version.version,
+      artifactFingerprint: remoteFingerprint,
+      verification: cleanSecurity,
+    },
+  }
+}
+
+async function confirmSupersede(targetVersion, nextTarget, runtime = {}) {
+  const expected = supersedeConfirmationPhrase(targetVersion, nextTarget)
+  if (runtime.confirm) {
+    await runtime.confirm(expected)
+    return
+  }
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await prompt.question(`Type "${expected}" to archive this clean superseded release: `)
+    if (answer.trim() !== expected) throw new Error('Supersede confirmation did not match')
+  }
+  finally {
+    prompt.close()
+  }
+}
+
+async function archiveCleanSupersede(originalState, preflight) {
+  const liveState = await readJsonIfPresent(statePath)
+  if (JSON.stringify(liveState) !== JSON.stringify(originalState)) {
+    throw new Error('Release state changed while supersede was being confirmed')
+  }
+  await mkdir(supersededDirectory, { recursive: true, mode: 0o700 })
+  await chmod(supersededDirectory, 0o700)
+  const archiveDirectory = await mkdtemp(path.join(supersededDirectory, `v${originalState.targetVersion}-`))
+  await chmod(archiveDirectory, 0o700)
+  const archivedStatePath = path.join(archiveDirectory, 'state.json')
+  const auditPath = path.join(archiveDirectory, 'supersede.json')
+  const audit = {
+    schema: 1,
+    kind: 'deyo.clean-release-supersede',
+    state: originalState,
+    supersededAt: new Date().toISOString(),
+    reason: 'master_advanced_with_new_canonical_tree',
+    currentSourceSnapshot: preflight.currentSourceSnapshot,
+    currentCanonicalTreeHash: preflight.currentCanonicalTreeHash,
+    nextTarget: preflight.nextTarget,
+    localMaster: preflight.localHead,
+    remoteMaster: preflight.remoteMaster,
+    tagCommit: preflight.tag.commit,
+    tagObject: preflight.tag.tagObject,
+    tagArchiveTreeHash: preflight.tag.treeHash,
+    tagProjectionKind: preflight.tag.projectionKind,
+    tagProjectionTreeHash: preflight.tag.projectionTreeHash,
+    artifactFingerprint: preflight.tag.fingerprint,
+    clawHub: preflight.clawHub,
+  }
+  await atomicPrivateJson(auditPath, audit)
+  await chmod(statePath, 0o600)
+  try {
+    await rename(statePath, archivedStatePath)
+  }
+  catch (error) {
+    await rm(archiveDirectory, { recursive: true, force: true })
+    throw error
+  }
+  await chmod(archivedStatePath, 0o600)
+  return {
+    ...audit,
+    archivePath: path.relative(root, auditPath).split(path.sep).join('/'),
+    archivedStatePath: path.relative(root, archivedStatePath).split(path.sep).join('/'),
+  }
+}
+
+async function supersedeCleanRelease(state, runtime = {}) {
+  const initial = await progressStage('Check clean release supersede preflight', async () => (
+    await cleanSupersedePreflight(state)
+  ))
+  process.stdout.write(
+    `Deyo clean release supersede plan: ${state.targetVersion} -> ${initial.nextTarget}; ` +
+    'the worktree, Git refs, ClawHub, latest, and origin/master will not be changed.\n',
+  )
+  await progressStage('Confirm clean release supersede', async () => {
+    await confirmSupersede(state.targetVersion, initial.nextTarget, runtime)
+  })
+  const final = await progressStage('Recheck clean release supersede preflight', async () => (
+    await cleanSupersedePreflight(state)
+  ))
+  if (final.currentSourceSnapshot !== initial.currentSourceSnapshot) {
+    throw new Error('Release source changed while supersede was being confirmed')
+  }
+  if (final.currentCanonicalTreeHash !== initial.currentCanonicalTreeHash) {
+    throw new Error('Canonical tree changed while supersede was being confirmed')
+  }
+  return await progressStage('Archive clean superseded release state', async () => (
+    await archiveCleanSupersede(state, final)
   ))
 }
 
@@ -1199,18 +1410,25 @@ async function runRelease(options, runtime, reporter) {
   const existingState = await readJsonIfPresent(statePath)
   const defaultNext = options.fixForward
     ? 'make fix-forward'
-    : options.abort
-      ? 'make abort'
-      : options.resume
-        ? 'make publish RESUME=1'
-        : 'make publish DRY_RUN=1'
-  reporter.setRecovery(existingState?.phase ?? 'none', existingState && !options.abort && !options.fixForward
+    : options.supersede
+      ? 'make supersede'
+      : options.abort
+        ? 'make abort'
+        : options.resume
+          ? 'make publish RESUME=1'
+          : 'make publish DRY_RUN=1'
+  reporter.setRecovery(existingState?.phase ?? 'none', existingState && !options.abort && !options.fixForward && !options.supersede
     ? 'make publish RESUME=1'
     : defaultNext)
   if (options.fixForward) {
     if (!existingState) throw new Error('No unfinished Deyo Skill release exists to fix-forward')
     assertFormalEnvironment(runtime)
     return await fixForwardTerminalRelease(existingState, runtime)
+  }
+  if (options.supersede) {
+    if (!existingState) throw new Error('No unfinished Deyo Skill release exists to supersede')
+    assertFormalEnvironment(runtime)
+    return await supersedeCleanRelease(existingState, runtime)
   }
   if (options.abort) {
     if (!existingState) throw new Error('No unfinished Deyo Skill release exists to abort')
@@ -1264,13 +1482,15 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const options = parseReleaseOptions(argv)
   const mode = options.fixForward
     ? 'fix-forward'
-    : options.abort
-      ? 'abort'
-      : options.resume
-        ? 'resume'
-        : options.dryRun
-          ? 'dry-run'
-          : 'publish'
+    : options.supersede
+      ? 'supersede'
+      : options.abort
+        ? 'abort'
+        : options.resume
+          ? 'resume'
+          : options.dryRun
+            ? 'dry-run'
+            : 'publish'
   const reporter = runtime.progressReporter ?? new ReleaseProgressReporter({
     stdout: runtime.progressStdout ?? process.stdout,
     stderr: runtime.progressStderr ?? process.stderr,
@@ -1296,6 +1516,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (receipt?.kind === 'deyo.terminal-security-fix-forward') {
       process.stdout.write(
         `Archived terminal-security Deyo Skill v${receipt.state.targetVersion} release at ${receipt.archivePath}; ` +
+        `the next publish target is v${receipt.nextTarget}.\n`,
+      )
+    }
+    else if (receipt?.kind === 'deyo.clean-release-supersede') {
+      process.stdout.write(
+        `Archived clean superseded Deyo Skill v${receipt.state.targetVersion} release at ${receipt.archivePath}; ` +
         `the next publish target is v${receipt.nextTarget}.\n`,
       )
     }
