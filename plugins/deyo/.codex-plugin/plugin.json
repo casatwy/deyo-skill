@@ -1,6 +1,6 @@
 {
   "name": "deyo",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Official Deyo plugin for reliable link and local-media transcription through the deyo CLI.",
   "author": {
     "name": "Deyo",
