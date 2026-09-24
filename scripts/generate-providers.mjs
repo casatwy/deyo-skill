@@ -19,6 +19,9 @@ const CANONICAL_LAYOUT = new Map([
   ['manifest.json', 'file'],
   ['scripts', 'directory'],
   ['scripts/publish-cleaned.mjs', 'file'],
+  ['scripts/batch-state.mjs', 'file'],
+  ['references', 'directory'],
+  ['references/batch.md', 'file'],
 ])
 
 function json(value) {
