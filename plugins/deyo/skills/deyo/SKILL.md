@@ -233,3 +233,11 @@ Progress/status remains on stderr. Upload JSON is redacted by the CLI/server so 
 - If streaming is unavailable on an older CLI, upgrade first. Do not silently pretend post-completion text is live streaming.
 - If the model is unavailable, still complete the CLI task, clearly state that cleanup fell back to Whisper raw text, and write the raw text to the safe final `.txt` path.
 - Preserve raw CLI/service errors for authentication, balance, upload, media, unsupported-source, and network failures. Do not invent a successful transcript.
+
+## 来源与合集
+
+支持 Bilibili、抖音、小红书、小宇宙、喜马拉雅、YouTube、Apple Podcasts、Twitter/X、TikTok、Instagram、微信视频号、微信公众号、红果、研直播、超星、快手、腾讯视频、看看新闻 共 18 个命名平台，以及 HTTP/HTTPS 通用媒体链接、单文件上传，共 20 类来源。视频号遵循独立功能开关。网页上传公开可见，`/upload` 保持 noindex，不进入 sitemap。
+
+红果整剧、抖店多课时与网页多媒体候选须先选一项，不默认选择，不批量转写。红果选集失败可返回目录重新选择；候选过期须重新解析。YouTube 播放列表、B站合集、小宇宙节目、Apple Podcasts 节目、喜马拉雅专辑和网页 playlist 只展示真实摘要并引导具体单集；抖音与小红书作者页展示作者摘要并引导具体作品。带 list 的 YouTube 具体视频仍按单视频处理。付费或受限内容先分类，所有摘要、未选目录和不可转写内容均不得复用、扣分钟或创建任务。封面缺失或加载失败隐藏；未知集数与零条区分。
+
+CLI 摘要型合集返回 HTTP 422、`UNSUPPORTED_CONTENT` 和 `mode`；旧 `COLLECTION_UNSUPPORTED` 仅保留读取兼容。多媒体候选返回 `MULTIPLE_MEDIA_SELECTION_REQUIRED`；红果目录返回 `HONGGUO_EPISODE_REQUIRED`，附归属当前用户的 `parseToken`，引导网页选集或提交精确单集 URL。token 不允许跨用户使用。

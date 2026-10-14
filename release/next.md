@@ -1,9 +1,7 @@
-# Deyo Skill source boundaries and Bilibili trial consent
+# Deyo Skill 来源与合集规则
 
-- Add explicit source boundaries for TikTok, Kankanews, and WeChat Channels, including the exact Kankanews hostname rule and canonical-page-only handling.
-- Guide Apple Podcasts shows, Xiaoyuzhou podcasts, and Bilibili Bangumi or UGC collections from their pre-billing HTTP 422 response to one concrete episode or video without retrying the whole set.
-- Require the user's own interactive confirmation for a Bilibili trial segment after showing full duration, transcribable duration, expected minute deduction, and the trial-only warning; bill only the transcribable duration.
-- Remove local-file hash and upload-hashing event semantics: file selection now proceeds directly to `upload.started`, while signed URLs and part ETags remain private.
-
-- 新增明确输入清单的顺序转写编排，完整正文与助手总结分开保存；本地 manifest 支持保守恢复，未知任务不重新提交。
-- 保留 Instagram 支持；CLI 仍为单输入，不增加后台队列、自动重试或充值。
+- 明确支持 18 个命名平台，以及 HTTP/HTTPS 通用媒体链接和单文件上传，共 20 类来源；微信视频号遵循独立功能开关。
+- 红果整剧、抖店多课时和网页多媒体候选必须先选择一项，不默认选择或批量转写；红果选集失败可返回目录，过期候选需重新解析。
+- 播放列表、节目、专辑和合集仅展示真实摘要并引导具体单集，抖音与小红书作者页引导具体作品；带 list 的 YouTube 具体视频仍按单视频处理。
+- 明确摘要型合集的 HTTP 422、`UNSUPPORTED_CONTENT` 与 `mode`，保留旧 `COLLECTION_UNSUPPORTED` 读取兼容；多媒体候选使用 `MULTIPLE_MEDIA_SELECTION_REQUIRED`，红果目录使用 `HONGGUO_EPISODE_REQUIRED`，其 `parseToken` 不得跨用户使用。
+- 付费或受限内容先分类；摘要、未选目录和不可转写内容不得复用任务、扣分钟或创建任务。缺失封面不阻断流程，未知集数与零条结果明确区分。
