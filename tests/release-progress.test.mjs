@@ -149,3 +149,51 @@ test('safe command labels never include release notes, temporary paths, or refs'
   assert.equal(label, 'clawhub publish')
   assert.doesNotMatch(label, /private|tmp|1\.2\.3/)
 })
+
+test('nested stages and parallel commands share one timer; confirmations suspend all rendering', async () => {
+  let now = 0
+  const stderr = memoryStream(true)
+  const intervals = fakeIntervals()
+  const reporter = new ReleaseProgressReporter({ stderr, stdout: memoryStream(), isTTY: true,
+    now: () => now, setInterval: intervals.setInterval, clearInterval: intervals.clearInterval })
+  await reporter.stage('Review wait', async () => {
+    now = 100
+    intervals.tickAll()
+    assert.match(stderr.text(), /Review wait \(100ms\)/)
+    await reporter.stage('Nested', async () => {
+      const a = reporter.startCommand('query a')
+      const b = reporter.startCommand('query b')
+      assert.equal(intervals.timers.size, 1)
+      now = 200
+      intervals.tickAll()
+      assert.match(stderr.text(), /query b/)
+      await reporter.suspend(async () => {
+        assert.equal(intervals.timers.size, 0)
+        const before = stderr.text()
+        now = 20_000
+        intervals.tickAll()
+        assert.equal(stderr.text(), before)
+        await reporter.suspend(async () => assert.equal(intervals.timers.size, 0))
+      })
+      assert.equal(intervals.timers.size, 1)
+      a.finish(); b.finish()
+    })
+  })
+  assert.equal(intervals.timers.size, 0)
+  await assert.rejects(reporter.stage('Failure', async () => { throw new Error('test') }))
+  assert.equal(intervals.timers.size, 0)
+})
+
+test('non-command async wait emits a heartbeat and stops cleanly', async () => {
+  let now = 0
+  const stderr = memoryStream()
+  const intervals = fakeIntervals()
+  const reporter = new ReleaseProgressReporter({ stderr, now: () => now,
+    setInterval: intervals.setInterval, clearInterval: intervals.clearInterval })
+  await reporter.stage('Review polling interval', async () => {
+    now = 10_000; intervals.tickAll()
+    assert.match(stderr.text(), /WAIT Review polling interval \(10.0s\)/)
+    assert.doesNotMatch(stderr.text(), /\u001B/)
+  })
+  assert.equal(intervals.timers.size, 0)
+})

@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "skillVersion": "1.0.15",
+  "skillVersion": "1.0.16",
   "minimumCliVersion": "0.2.2",
-  "canonicalTreeHash": "e21310670d2e06f9e3b668a88b6dc28c4153070d13b71261e310f6ad63f124a0",
+  "canonicalTreeHash": "026a9682a714509f74da3131a0bdbfb5ce3bf7ee7ac2b98911c8b3ad9204bd6a",
   "source": {
     "repository": "https://github.com/casatwy/deyo-skill.git",
-    "ref": "v1.0.15"
+    "ref": "v1.0.16"
   },
   "providers": {
     "codex": {

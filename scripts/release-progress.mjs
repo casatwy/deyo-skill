@@ -70,11 +70,16 @@ export class ReleaseProgressReporter {
     this.phase = 'none'
     this.nextCommand = 'make publish DRY_RUN=1'
     this.spinnerRendered = false
+    this.timer = null
+    this.paused = 0
+    this.frame = 0
+    this.lastOutputAt = this.now()
   }
 
   writeLine(message) {
     this.clearSpinner()
     this.stderr.write(`[release] ${message}\n`)
+    this.lastOutputAt = this.now()
   }
 
   mode(mode) {
@@ -91,6 +96,7 @@ export class ReleaseProgressReporter {
     if (this.stageStack.length === 0) this.lastFailedStage = null
     this.stageStack.push(name)
     this.writeLine(`START ${name}`)
+    const activity = this.startActivity(name)
     try {
       const result = await operation()
       this.writeLine(`OK ${name} (${formatDuration(this.now() - startedAt)})`)
@@ -105,6 +111,7 @@ export class ReleaseProgressReporter {
       throw error
     }
     finally {
+      activity.finish()
       const index = this.stageStack.lastIndexOf(name)
       if (index !== -1) this.stageStack.splice(index, 1)
     }
@@ -121,49 +128,61 @@ export class ReleaseProgressReporter {
     this.writeLine(`POLL ClawHub review: ${reason}; waited=${elapsed}; remaining=${remaining}; next=${next}`)
   }
 
-  startCommand(label) {
-    const activity = {
-      label,
-      startedAt: this.now(),
-      lastOutputAt: this.now(),
-      frame: 0,
-      finished: false,
-      timer: null,
-      openLine: { stdout: false, stderr: false },
-    }
-    this.writeLine(`RUN ${label}`)
-    const tick = () => {
-      if (activity.finished) return
+  ensureTimer() {
+    if (this.timer !== null || this.paused || !this.activities.size) return
+    this.timer = this.setInterval(() => {
+      if (this.paused) return
       const interval = this.isTTY ? this.spinnerIntervalMs : this.heartbeatIntervalMs
-      if (this.now() - activity.lastOutputAt < interval) return
+      if (this.now() - this.lastOutputAt < interval) return
+      if ([...this.activities].some(activity => Object.values(activity.openLine).some(Boolean))) return
+      const active = [...this.activities]
+      const activity = active.at(-1)
+      if (!activity) return
+      const label = activity.label
       const elapsed = formatDuration(this.now() - activity.startedAt)
       if (this.isTTY) {
-        const frame = SPINNER_FRAMES[activity.frame % SPINNER_FRAMES.length]
-        activity.frame += 1
+        const frame = SPINNER_FRAMES[this.frame++ % SPINNER_FRAMES.length]
         this.stderr.write(`\r\u001B[2K[release] ${frame} ${label} (${elapsed})`)
         this.spinnerRendered = true
       }
-      else {
-        this.writeLine(`WAIT ${label} (${elapsed})`)
-      }
+      else this.writeLine(`WAIT ${label} (${elapsed})`)
+    }, this.isTTY ? this.spinnerIntervalMs : this.heartbeatIntervalMs)
+  }
+
+  async suspend(operation) {
+    this.paused += 1
+    this.clearSpinner()
+    if (this.timer !== null) this.clearInterval(this.timer)
+    this.timer = null
+    try { return await operation() }
+    finally {
+      this.paused -= 1
+      this.lastOutputAt = this.now()
+      this.ensureTimer()
     }
-    activity.timer = this.setInterval(
-      tick,
-      this.isTTY ? this.spinnerIntervalMs : this.heartbeatIntervalMs,
-    )
+  }
+
+  startActivity(label, command = false) {
+    const activity = {
+      label, startedAt: this.now(), finished: false,
+      openLine: { stdout: false, stderr: false },
+    }
     activity.forward = (stream, chunk) => {
       this.clearSpinner()
       const target = stream === 'stderr' ? this.stderr : this.stdout
       target.write(chunk)
-      activity.lastOutputAt = this.now()
+      this.lastOutputAt = this.now()
       const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
       activity.openLine[stream] = value.length > 0 && value.at(-1) !== 0x0a && value.at(-1) !== 0x0d
     }
     activity.finish = (outcome = {}) => {
       if (activity.finished) return
       activity.finished = true
-      this.clearInterval(activity.timer)
       this.activities.delete(activity)
+      if (!this.activities.size && this.timer !== null) {
+        this.clearInterval(this.timer)
+        this.timer = null
+      }
       this.clearSpinner()
       if (activity.openLine.stdout) this.stdout.write('\n')
       if (activity.openLine.stderr) this.stderr.write('\n')
@@ -172,10 +191,16 @@ export class ReleaseProgressReporter {
         : outcome.signal
           ? `signal=${outcome.signal}`
           : `exit=${outcome.code ?? 0}`
-      this.writeLine(`EXIT ${label} ${status} (${formatDuration(this.now() - activity.startedAt)})`)
+      if (command) this.writeLine(`EXIT ${label} ${status} (${formatDuration(this.now() - activity.startedAt)})`)
     }
     this.activities.add(activity)
+    this.ensureTimer()
     return activity
+  }
+
+  startCommand(label) {
+    this.writeLine(`RUN ${label}`)
+    return this.startActivity(label, true)
   }
 
   clearSpinner() {
@@ -217,7 +242,20 @@ export function currentProgressReporter() {
 }
 
 export async function withProgressReporter(reporter, operation) {
-  return await reporterStorage.run(reporter, operation)
+  const interrupt = signal => {
+    reporter.stop()
+    process.removeListener('SIGINT', interrupt)
+    process.removeListener('SIGTERM', interrupt)
+    process.kill(process.pid, signal)
+  }
+  process.on('SIGINT', interrupt)
+  process.on('SIGTERM', interrupt)
+  try { return await reporterStorage.run(reporter, operation) }
+  finally {
+    process.removeListener('SIGINT', interrupt)
+    process.removeListener('SIGTERM', interrupt)
+    reporter.stop()
+  }
 }
 
 export async function progressStage(name, operation) {

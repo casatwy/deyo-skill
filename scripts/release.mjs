@@ -528,19 +528,23 @@ async function fullPreflight({ resume, state }) {
 }
 
 async function confirm(targetVersion, resume, runtime = {}) {
-  const expected = confirmationPhrase(targetVersion, resume)
-  if (runtime.confirm) {
-    await runtime.confirm(expected)
-    return
+  const operation = async () => {
+    const expected = confirmationPhrase(targetVersion, resume)
+    if (runtime.confirm) {
+      await runtime.confirm(expected)
+      return
+    }
+    const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+    try {
+      const answer = await prompt.question(`Type "${expected}" to continue: `)
+      if (answer.trim() !== expected) throw new Error('Release confirmation did not match')
+    }
+    finally {
+      prompt.close()
+    }
   }
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
-  try {
-    const answer = await prompt.question(`Type "${expected}" to continue: `)
-    if (answer.trim() !== expected) throw new Error('Release confirmation did not match')
-  }
-  finally {
-    prompt.close()
-  }
+  const reporter = currentProgressReporter()
+  return reporter ? await reporter.suspend(operation) : await operation()
 }
 
 function assertFormalEnvironment(runtime = {}) {
@@ -553,19 +557,23 @@ function assertFormalEnvironment(runtime = {}) {
 }
 
 async function confirmAbort(targetVersion, runtime = {}) {
-  const expected = abortConfirmationPhrase(targetVersion)
-  if (runtime.confirm) {
-    await runtime.confirm(expected)
-    return
+  const operation = async () => {
+    const expected = abortConfirmationPhrase(targetVersion)
+    if (runtime.confirm) {
+      await runtime.confirm(expected)
+      return
+    }
+    const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+    try {
+      const answer = await prompt.question(`Type "${expected}" to archive this frozen release: `)
+      if (answer.trim() !== expected) throw new Error('Abort confirmation did not match')
+    }
+    finally {
+      prompt.close()
+    }
   }
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
-  try {
-    const answer = await prompt.question(`Type "${expected}" to archive this frozen release: `)
-    if (answer.trim() !== expected) throw new Error('Abort confirmation did not match')
-  }
-  finally {
-    prompt.close()
-  }
+  const reporter = currentProgressReporter()
+  return reporter ? await reporter.suspend(operation) : await operation()
 }
 
 async function archiveFrozenAbort(originalState, preflight) {
@@ -780,19 +788,23 @@ async function terminalFixForwardPreflight(state) {
 }
 
 async function confirmFixForward(targetVersion, nextTarget, runtime = {}) {
-  const expected = fixForwardConfirmationPhrase(targetVersion, nextTarget)
-  if (runtime.confirm) {
-    await runtime.confirm(expected)
-    return
+  const operation = async () => {
+    const expected = fixForwardConfirmationPhrase(targetVersion, nextTarget)
+    if (runtime.confirm) {
+      await runtime.confirm(expected)
+      return
+    }
+    const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+    try {
+      const answer = await prompt.question(`Type "${expected}" to abandon this terminal security release: `)
+      if (answer.trim() !== expected) throw new Error('Fix-forward confirmation did not match')
+    }
+    finally {
+      prompt.close()
+    }
   }
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
-  try {
-    const answer = await prompt.question(`Type "${expected}" to abandon this terminal security release: `)
-    if (answer.trim() !== expected) throw new Error('Fix-forward confirmation did not match')
-  }
-  finally {
-    prompt.close()
-  }
+  const reporter = currentProgressReporter()
+  return reporter ? await reporter.suspend(operation) : await operation()
 }
 
 async function archiveTerminalFixForward(originalState, preflight) {
@@ -966,19 +978,23 @@ async function cleanSupersedePreflight(state) {
 }
 
 async function confirmSupersede(targetVersion, nextTarget, runtime = {}) {
-  const expected = supersedeConfirmationPhrase(targetVersion, nextTarget)
-  if (runtime.confirm) {
-    await runtime.confirm(expected)
-    return
+  const operation = async () => {
+    const expected = supersedeConfirmationPhrase(targetVersion, nextTarget)
+    if (runtime.confirm) {
+      await runtime.confirm(expected)
+      return
+    }
+    const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+    try {
+      const answer = await prompt.question(`Type "${expected}" to archive this clean superseded release: `)
+      if (answer.trim() !== expected) throw new Error('Supersede confirmation did not match')
+    }
+    finally {
+      prompt.close()
+    }
   }
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
-  try {
-    const answer = await prompt.question(`Type "${expected}" to archive this clean superseded release: `)
-    if (answer.trim() !== expected) throw new Error('Supersede confirmation did not match')
-  }
-  finally {
-    prompt.close()
-  }
+  const reporter = currentProgressReporter()
+  return reporter ? await reporter.suspend(operation) : await operation()
 }
 
 async function archiveCleanSupersede(originalState, preflight) {
