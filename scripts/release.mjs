@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process'
-import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { spawn, execFileSync } from 'node:child_process'
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -48,12 +48,15 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clawhub = path.join(root, 'node_modules', '.bin', 'clawhub')
-const recoveryDirectory = path.join(root, '.git', 'deyo-release')
-const statePath = path.join(recoveryDirectory, 'state.json')
-const receiptsDirectory = path.join(recoveryDirectory, 'receipts')
-const abortedDirectory = path.join(recoveryDirectory, 'aborted')
-const abandonedDirectory = path.join(recoveryDirectory, 'abandoned')
-const supersededDirectory = path.join(recoveryDirectory, 'superseded')
+let recoveryDirectory, statePath, receiptsDirectory, abortedDirectory, abandonedDirectory, supersededDirectory
+function initializeRecoveryPaths() {
+  recoveryDirectory = path.resolve(root, execFileSync('git', ['rev-parse', '--git-path', 'deyo-release'], { cwd: root, encoding: 'utf8' }).trim())
+  statePath = path.join(recoveryDirectory, 'state.json')
+  receiptsDirectory = path.join(recoveryDirectory, 'receipts')
+  abortedDirectory = path.join(recoveryDirectory, 'aborted')
+  abandonedDirectory = path.join(recoveryDirectory, 'abandoned')
+  supersededDirectory = path.join(recoveryDirectory, 'superseded')
+}
 const officialRef = '@casatwy/deyo'
 const NETWORK_TIMEOUT_MS = 30_000
 const CLAWHUB_LICENSE = 'MIT-0'
@@ -177,7 +180,7 @@ async function writeState(state) {
 async function advanceState(state, phase, extra = {}) {
   const updated = { ...state, ...extra, phase, updatedAt: new Date().toISOString() }
   await writeState(updated)
-  currentProgressReporter()?.setRecovery(phase, 'make publish RESUME=1')
+  currentProgressReporter()?.setRecovery(phase, 'make publish')
   return updated
 }
 
@@ -189,6 +192,8 @@ async function assertGitPreflight() {
   const remotes = (await git(['remote'])).stdout.trim().split('\n').filter(Boolean)
   const origin = (await git(['remote', 'get-url', 'origin'])).stdout.trim()
   validateRemoteConfiguration(remotes, origin)
+  const pushOrigin = (await git(['remote', 'get-url', '--push', 'origin'])).stdout.trim()
+  validateRemoteConfiguration(remotes, pushOrigin)
 
   const gitDirectory = (await git(['rev-parse', '--git-dir'])).stdout.trim()
   const markers = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply']
@@ -285,13 +290,13 @@ async function inspectExact(version) {
 async function assertTargetTagsAbsent(targetVersion) {
   const tag = `v${targetVersion}`
   const local = await git(['rev-parse', '-q', '--verify', `refs/tags/${tag}`], { allowFailure: true })
-  if (local.code === 0) throw new Error(`Cannot abort because local tag ${tag} exists`)
+  if (local.code === 0) throw new Error(`Release blocked: local tag ${tag} exists`)
   if (local.code !== 1) throw new Error(`Could not prove that local tag ${tag} is absent`)
   const remote = await git(
     ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
     { timeoutMs: NETWORK_TIMEOUT_MS },
   )
-  if (remote.stdout.trim()) throw new Error(`Cannot abort because remote tag ${tag} exists`)
+  if (remote.stdout.trim()) throw new Error(`Release blocked: remote tag ${tag} exists`)
 }
 
 async function frozenAbortPreflight(state) {
@@ -398,6 +403,30 @@ async function runRepositoryValidation() {
   })
 }
 
+async function validateCandidate(version) {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'deyo-release-candidate-'))
+  try {
+    await cp(root, temporary, {
+      recursive: true,
+      filter: source => !['.git', 'node_modules'].includes(path.relative(root, source).split(path.sep)[0]),
+    })
+    await symlink(path.join(root, 'node_modules'), path.join(temporary, 'node_modules'), 'dir')
+    const manifestPath = path.join(temporary, 'deyo/manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    manifest.skillVersion = version
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    await textCommand(process.execPath, ['scripts/generate-providers.mjs'], { cwd: temporary })
+    await textCommand(process.execPath, ['scripts/validate-artifacts.mjs'], { cwd: temporary })
+    await textCommand('pnpm', ['test'], { cwd: temporary })
+    await textCommand('claude', ['plugin', 'validate', '.'], { cwd: temporary })
+    await git(['diff', '--check'])
+  }
+  finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+}
+
+
 async function assertCliPublished(minimumCliVersion, targetVersion) {
   await progressStage('Verify minimum npm CLI version', async () => {
     const compatibleRange = `^${minimumCliVersion}`
@@ -486,7 +515,7 @@ async function fullPreflight({ resume, state }) {
       })
     })
   }
-  if (!resume || phaseAtLeast(recoveredState, 'prepared')) await runRepositoryValidation()
+  if (resume && phaseAtLeast(recoveredState, 'prepared') && !phaseAtLeast(recoveredState, 'tagged')) await runRepositoryValidation()
   else progressSkip('Repository validation preflight', 'runs while preparing the frozen workspace')
   const canonical = JSON.parse(await readFile(path.join(root, 'deyo/manifest.json'), 'utf8'))
 
@@ -499,6 +528,7 @@ async function fullPreflight({ resume, state }) {
     const inspect = await inspectVersions()
     const allocation = allocateTargetVersion(inspect)
     assertTargetAbsent(allocation.versions, allocation.targetVersion)
+    await assertTargetTagsAbsent(allocation.targetVersion)
     const exact = await inspectExact(allocation.targetVersion)
     if (exact) throw new Error(`ClawHub target ${allocation.targetVersion} is already reserved`)
     return { inspect, allocation }
@@ -515,6 +545,7 @@ async function fullPreflight({ resume, state }) {
   const releaseNotes = await progressStage('Validate release notes', async () => (
     validateReleaseNotes(await readFile(path.join(root, 'release/next.md'))).content
   ))
+  await validateCandidate(allocation.targetVersion)
   const stage = await progressStage('Build ClawHub preflight projection', async () => (
     await stageCanonicalVersion(allocation.targetVersion)
   ))
@@ -1376,7 +1407,7 @@ async function waitForClawHub(state, stage, runtime = {}) {
         await sleep(next)
       }
     }
-    throw new Error(`ClawHub ${state.targetVersion} [review.retryable]: ${lastReason}. Resume the same version with: make publish RESUME=1`)
+    throw new Error(`ClawHub ${state.targetVersion} [review.retryable]: ${lastReason}. Resume the same version with: make publish`)
   })
 }
 
@@ -1445,8 +1476,14 @@ async function completeRelease(state) {
 
 async function executeRelease(initialState, runtime = {}) {
   let state = initialState
-  currentProgressReporter()?.setRecovery(state.phase, 'make publish RESUME=1')
+  currentProgressReporter()?.setRecovery(state.phase, 'make publish')
   await progressStage('Validate frozen release source', async () => {
+    if (phaseAtLeast(state, 'tag_pushed')) { await tagEvidence(state); return }
+    if (phaseAtLeast(state, 'tagged')) {
+      const commit = (await git(['rev-parse', `${state.tag}^{commit}`])).stdout.trim()
+      if (commit !== state.releaseCommit) throw new Error('Local immutable tag differs from release state')
+      return
+    }
     const currentSourceSnapshot = await sourceSnapshot(state.baseVersion, state.targetVersion)
     if (currentSourceSnapshot !== state.sourceSnapshot) {
       throw new Error('Release source changed after the version was frozen')
@@ -1515,7 +1552,10 @@ async function executeRelease(initialState, runtime = {}) {
 }
 
 async function runRelease(options, runtime, reporter) {
+  initializeRecoveryPaths()
   const existingState = await readJsonIfPresent(statePath)
+  if (existingState && !options.abort && !options.fixForward && !options.supersede) options = { ...options, resume: true }
+  if (options.resume && !options.dryRun) reporter.mode('resume')
   const defaultNext = options.fixForward
     ? 'make fix-forward'
     : options.supersede
@@ -1523,35 +1563,47 @@ async function runRelease(options, runtime, reporter) {
       : options.abort
         ? 'make abort'
         : options.resume
-          ? 'make publish RESUME=1'
+          ? 'make publish'
           : 'make publish DRY_RUN=1'
   reporter.setRecovery(existingState?.phase ?? 'none', existingState && !options.abort && !options.fixForward && !options.supersede
-    ? 'make publish RESUME=1'
+    ? 'make publish'
     : defaultNext)
   if (options.fixForward) {
-    if (!existingState) throw new Error('No unfinished Deyo Skill release exists to fix-forward')
+    if (!existingState) throw new Error('No unfinished deyo Skill release exists to fix-forward')
     assertFormalEnvironment(runtime)
     return await fixForwardTerminalRelease(existingState, runtime)
   }
   if (options.supersede) {
-    if (!existingState) throw new Error('No unfinished Deyo Skill release exists to supersede')
+    if (!existingState) throw new Error('No unfinished deyo Skill release exists to supersede')
     assertFormalEnvironment(runtime)
     return await supersedeCleanRelease(existingState, runtime)
   }
   if (options.abort) {
-    if (!existingState) throw new Error('No unfinished Deyo Skill release exists to abort')
+    if (!existingState) throw new Error('No unfinished deyo Skill release exists to abort')
     assertFormalEnvironment(runtime)
     return await abortFrozenRelease(existingState, runtime)
   }
-  if (options.resume && !existingState) throw new Error('No unfinished Deyo Skill release exists')
-  if (!options.resume && existingState) throw new Error('An unfinished release exists; use make publish RESUME=1')
+  if (options.resume && !existingState) throw new Error('No unfinished deyo Skill release exists')
   if (!options.dryRun) assertFormalEnvironment(runtime)
 
+  if (existingState?.phase === 'tag_pushed' &&
+      await hashTree(path.join(root, 'deyo')) !== existingState.canonicalTreeHash) {
+    const verification = await verifyExact(existingState.targetVersion)
+    let terminal = false
+    try { terminalSecurityEvidence(verification, existingState.targetVersion); terminal = true } catch {}
+    if (terminal) {
+      await terminalFixForwardPreflight(existingState)
+      await validateCandidate((await inspectVersions().then(allocateTargetVersion)).targetVersion)
+      if (options.dryRun) { process.stdout.write('Dry-run: repaired terminal release may advance after evidence verification.\n'); return null }
+      await fixForwardTerminalRelease(existingState, runtime)
+      return await runRelease({ ...options, resume: false }, runtime, reporter)
+    }
+  }
   const preflight = await fullPreflight({ resume: options.resume, state: existingState })
   const targetVersion = options.resume ? preflight.state.targetVersion : preflight.allocation.targetVersion
   const baseVersion = options.resume ? preflight.state.baseVersion : preflight.allocation.baseVersion
 
-  process.stdout.write(`Deyo Skill release plan: ${baseVersion} -> ${targetVersion}\n`)
+  process.stdout.write(`deyo Skill release plan: ${baseVersion} -> ${targetVersion}\n`)
   process.stdout.write('Providers: Codex, Claude, Gemini, OpenClaw; npm CLI and web deployment excluded.\n')
   if (options.dryRun) {
     process.stdout.write('Actions: freeze state, write one version, generate providers, validate, commit, annotate tag, push tag, publish and verify ClawHub, push master, verify remote providers, write receipt.\n')
@@ -1580,7 +1632,7 @@ async function runRelease(options, runtime, reporter) {
       updatedAt: new Date().toISOString(),
     }
     await writeState(state)
-    reporter.setRecovery('frozen', 'make publish RESUME=1')
+    reporter.setRecovery('frozen', 'make publish')
     return state
   })
   return await executeRelease(state, runtime)

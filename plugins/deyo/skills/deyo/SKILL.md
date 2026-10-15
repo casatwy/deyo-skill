@@ -50,7 +50,7 @@ deyo skill _openclaw-check --scope global
 - If the command is missing, the version is too old, or a required capability (including streaming) is missing, first explain the detected problem and show this exact global install/upgrade command:
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 - Execute the command only when the current request explicitly authorizes this installation or upgrade, or the user subsequently explicitly agrees. A normal transcription request does not authorize installation or upgrade. If authorization is missing, ask before executing; if already explicitly authorized, do not ask again. If the user declines, do not install or upgrade; explain the blocked capability and stop the affected workflow.

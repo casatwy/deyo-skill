@@ -11,7 +11,7 @@ endif
 .PHONY: publish abort fix-forward supersede generate validate test
 
 publish:
-	@cd "$(ROOT_DIR)" && node scripts/release.mjs $(if $(filter 1,$(DRY_RUN)),--dry-run,) $(if $(filter 1,$(RESUME)),--resume,)
+	@cd "$(ROOT_DIR)" && node scripts/release.mjs $(if $(filter 1,$(DRY_RUN)),--dry-run,)
 
 abort:
 	@cd "$(ROOT_DIR)" && node scripts/release.mjs --abort

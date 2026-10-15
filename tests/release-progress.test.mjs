@@ -115,7 +115,7 @@ test('stage timing, skip, polling, and failure summaries include recovery guidan
   })
   reporter.skip('Create release commit', 'recovery phase committed')
   reporter.poll('security scan pending', { elapsedMs: 15_000, remainingMs: 585_000, nextMs: 15_000 })
-  reporter.setRecovery('tag_pushed', 'make publish RESUME=1')
+  reporter.setRecovery('tag_pushed', 'make publish')
   const error = new CommandExecutionError('git push', { code: 42 })
   await assert.rejects(
     reporter.stage('Push immutable release tag', async () => {
@@ -133,7 +133,7 @@ test('stage timing, skip, polling, and failure summaries include recovery guidan
   assert.match(stderr.text(), /POLL ClawHub review: security scan pending; waited=15\.0s; remaining=585\.0s; next=15\.0s/)
   assert.match(stderr.text(), /FAIL Push immutable release tag \(250ms; exit=42\)/)
   assert.match(stderr.text(), /FAILURE stage=Push immutable release tag; exit=42; recovery_phase=tag_pushed/)
-  assert.match(stderr.text(), /next="make publish RESUME=1"/)
+  assert.match(stderr.text(), /next="make publish"/)
   assert.equal(intervals.timers.size, 0)
   assert.equal(error.progressReported, true)
 })

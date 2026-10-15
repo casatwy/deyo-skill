@@ -29,7 +29,7 @@
 ## 核心规则
 
 - 优先使用系统里已安装的 `deyo` 命令。
-- 如果 `deyo` 不存在、版本低于 `0.2.2`，或 `deyo --help` 里还没有 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`，先安装或升级到 `@casatwy/deyo@^0.2.0`。
+- 如果 `deyo` 不存在、版本低于 `0.2.2`，或 `deyo --help` 里还没有 `--stream-transcript`、`--progress-format`、`--file`、`--mime-type`，先安装或升级到 `@casatwy/deyo@latest`。
 - 默认使用生产服务和 CLI 默认配置；只有用户明确要求本地/开发环境时，才传 `--base-url http://deyo.mac-studio`。
 - 不要虚构 API key；如果用户没有提供，要求用户先到 `https://deyo.miaobi.fun/me/api-keys` 创建。
 - 只有用户明确要求保存 API key 时，才用 `deyo auth login --api-key '...'` 写入本地配置。
@@ -94,7 +94,7 @@ deyo --base-url http://deyo.mac-studio -O ./tmp/out.txt 'https://www.youtube.com
 安装 CLI：
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 保存 API key：
@@ -239,7 +239,7 @@ YouTube 字幕直出的 `text` 同样整理后再展示；SRT/VTT 保持原样�
 安装已发布的 CLI：
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 保存 API key：
@@ -372,7 +372,7 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 公共安装与只读状态命令：
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 deyo --version
 
 deyo skill install --platform claude
@@ -411,7 +411,7 @@ CLI 会添加官方 Git marketplace `casatwy/deyo-skill` 并安装 `deyo@deyo-of
 先确保机器上已经有 `deyo` 命令：
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 默认使用全局、owner-qualified 安装：
@@ -484,13 +484,13 @@ skill_/
 make abort
 ```
 
-该命令与普通 `publish` / `RESUME=1` 相互独立。它会重新在线核对官方 Git 分支、upstream、origin、local/remote master、local/remote 目标 tag、ClawHub 完整不可变版本历史与精确目标版本；CI、非交互终端、非 `frozen` state 或任何冲突都会硬停止。确认短语固定为 `abort deyo v<目标版本>`。
+该命令与普通 `publish` / `make publish` 相互独立。它会重新在线核对官方 Git 分支、upstream、origin、local/remote master、local/remote 目标 tag、ClawHub 完整不可变版本历史与精确目标版本；CI、非交互终端、非 `frozen` state 或任何冲突都会硬停止。确认短语固定为 `abort deyo v<目标版本>`。
 
-中止不会修改工作树、Git 远端或 ClawHub。Active state 会通过同文件系统原子 rename 归档到私有的 `.git/deyo-release/aborted/`，同时记录原 state、中止时间、原因和当前 source snapshot。不要手工删除 state，也不要修改 frozen snapshot 后尝试 `RESUME=1`。中止成功后，普通 `make publish` 会重新枚举 ClawHub；如果最高不可变版本和目标占用状态没有变化，会重新冻结同一个 patch 版本。
+中止不会修改工作树、Git 远端或 ClawHub。Active state 会通过同文件系统原子 rename 归档到私有的 `.git/deyo-release/aborted/`，同时记录原 state、中止时间、原因和当前 source snapshot。不要手工删除 state，也不要修改 frozen snapshot 后尝试 `make publish`。中止成功后，普通 `make publish` 会重新枚举 ClawHub；如果最高不可变版本和目标占用状态没有变化，会重新冻结同一个 patch 版本。
 
 ## 维护者：clean release supersede
 
-`abort` 只处理尚未产生不可变发布物的 `frozen` state；`fix-forward` 只处理 ClawHub security 终态失败。若不可变版本已经成功发布并通过 pass/clean，但没有 success receipt，随后同一条 `master` 已用新的 canonical 内容严格快进，则普通 `RESUME=1` 会保持拒绝并提示：
+`abort` 只处理尚未产生不可变发布物的 `frozen` state；`fix-forward` 只处理 ClawHub security 终态失败。若不可变版本已经成功发布并通过 pass/clean，但没有 success receipt，随后同一条 `master` 已用新的 canonical 内容严格快进，则普通 `make publish` 会保持拒绝并提示：
 
 ```bash
 make supersede
@@ -512,6 +512,6 @@ make fix-forward
 
 成功后，active state 会通过同文件系统原子 rename 归档到权限受限的 `.git/deyo-release/abandoned/`；audit 保存原 state、时间、`security.status_not_clean` verdict/findings、当前 source snapshot、tag/tree/artifact fingerprint 与下一目标。命令本身不修改工作树或外部状态。维护者随后修复 canonical 内容并执行普通 `make publish`；发布器只有在 abandoned audit 和所有不可变证据仍一致时，才允许本地 `master` 位于失败 release commit 而远端 `master` 仍在旧基线，并自动从 ClawHub 最高失败版本分配下一 patch。下一版本通过 pass/clean 前绝不推进远端 `master`；激活时历史会同时包含失败 commit 和修复 commit，tip 必须是通过验证的新版本。
 
-审核失败摘要显示目标版本和简短原因码。仅 `tag_pushed` 下精确版本、发布者身份与文件指纹匹配，且唯一终态失败为 `security.status_not_clean` / `suspicious` 时提示 `make fix-forward`；它仍须运行完整预检，不自动归档或发布。等待或网络失败提示 `make publish RESUME=1`；身份、指纹或其他终态冲突要求停止检查证据，不自动换版本。
+审核失败摘要显示目标版本和简短原因码。仅 `tag_pushed` 下精确版本、发布者身份与文件指纹匹配，且唯一终态失败为 `security.status_not_clean` / `suspicious` 时提示 `make fix-forward`；普通发布命令仅在 canonical 已修复且完整证据与候选产物预检通过后，确认准确版本并归档进入下一版本。等待或网络失败提示 `make publish`；身份、指纹或其他终态冲突要求停止检查证据，不自动换版本。
 
 受控恢复支持两条路径：原路径要求本地 HEAD 为失败 release commit、远端 master 为冻结基线；新增 `synced-descendant` 路径要求本地 HEAD 与远端 master 相同，失败 commit 是严格祖先，当前 canonical tree 已改变。确认前后重查源码、提交、版本分配与不可变证据。归档额外保存恢复路径、本地和远端提交及 canonical tree hash；旧归档仍兼容。后续普通发布即使本地与远端相同，也必须验证对应归档、当前源码快照、tag object、远端指纹与终态审核；任何漂移均拒绝。新版本使用该已确认提交作为基线。

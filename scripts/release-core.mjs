@@ -319,7 +319,7 @@ export function reconcileResumeGitState(state, context) {
   ) {
     throw new Error(
       'Current master advanced from the immutable clean release commit with a new canonical tree; ' +
-      'RESUME=1 cannot recover it. Run make supersede.',
+      'Ordinary publish cannot reconcile this advanced Git history. Run make supersede.',
     )
   }
 

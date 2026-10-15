@@ -10,3 +10,6 @@
 - CLI 缺失、过旧或缺少流式能力时先说明全局安装命令，仅在明确授权后执行；统一插件回退入口的授权规则。
 
 - 扩展受控 fix-forward：修复提交已同步远端时仍完整校验失败版本证据，私有归档后正常发布下一 patch；保留原恢复路径兼容。
+
+- Install the latest npm CLI with `npm install -g @casatwy/deyo@latest`; preserve the manifest minimum compatibility requirement.
+- Ordinary publish automatically reconciles retained release evidence and immutable artifacts.

@@ -29,7 +29,7 @@ A Deyo mention, ambient attachment, current directory, editor selection, clipboa
 ## Core Rules
 
 - Prefer the installed `deyo` command.
-- If `deyo` is missing, older than `0.2.2`, or `deyo --help` does not list `--stream-transcript`, `--progress-format`, `--file`, and `--mime-type`, install or upgrade to `@casatwy/deyo@^0.2.0` first.
+- If `deyo` is missing, older than `0.2.2`, or `deyo --help` does not list `--stream-transcript`, `--progress-format`, `--file`, and `--mime-type`, install or upgrade to `@casatwy/deyo@latest` first.
 - Use the production service and the CLI's default configuration by default; only pass `--base-url http://deyo.mac-studio` when the user explicitly asks for local/development mode.
 - Never invent an API key; if the user does not provide one, ask them to create it from `https://deyo.miaobi.fun/me/api-keys`.
 - Save an API key with `deyo auth login --api-key '...'` only when the user explicitly asks to persist it.
@@ -94,7 +94,7 @@ deyo --base-url http://deyo.mac-studio -O ./tmp/out.txt 'https://www.youtube.com
 Install the CLI:
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 Save an API key:
@@ -239,7 +239,7 @@ The following `text` commands without `--stream-transcript` are only for explici
 Install the published CLI:
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 Save an API key:
@@ -372,7 +372,7 @@ deyo -O ./tmp/bilibili-app.txt 'bilibili://video/BVxxxx?page=2'
 Public install and read-only status commands:
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 deyo --version
 
 deyo skill install --platform claude
@@ -411,7 +411,7 @@ If you already use OpenClaw, prefer its native `openclaw skills` commands to ins
 First make sure the machine already has the `deyo` command:
 
 ```bash
-npm install -g @casatwy/deyo@^0.2.0
+npm install -g @casatwy/deyo@latest
 ```
 
 The default is an owner-qualified global install:
@@ -484,13 +484,13 @@ Run this only while a release is strictly `frozen`, before any release commit, t
 make abort
 ```
 
-This command is separate from normal `publish` and `RESUME=1`. It rechecks the official Git branch, upstream, origin, local/remote master, local/remote target tag, complete immutable ClawHub history, and the exact target version online. CI, a non-interactive terminal, a non-`frozen` state, or any conflict stops the abort. The confirmation phrase is exactly `abort deyo v<target version>`.
+This command is separate from normal `publish` and `make publish`. It rechecks the official Git branch, upstream, origin, local/remote master, local/remote target tag, complete immutable ClawHub history, and the exact target version online. CI, a non-interactive terminal, a non-`frozen` state, or any conflict stops the abort. The confirmation phrase is exactly `abort deyo v<target version>`.
 
-Aborting does not change the worktree, Git remotes, or ClawHub. The active state is atomically renamed on the same filesystem into private storage under `.git/deyo-release/aborted/`, with the original state, abort time, reason, and current source snapshot recorded. Do not delete state manually or edit a frozen snapshot and attempt `RESUME=1`. After a successful abort, normal `make publish` enumerates ClawHub again and freezes the same patch when the immutable maximum and target reservation remain unchanged.
+Aborting does not change the worktree, Git remotes, or ClawHub. The active state is atomically renamed on the same filesystem into private storage under `.git/deyo-release/aborted/`, with the original state, abort time, reason, and current source snapshot recorded. Do not delete state manually or edit a frozen snapshot and attempt `make publish`. After a successful abort, normal `make publish` enumerates ClawHub again and freezes the same patch when the immutable maximum and target reservation remain unchanged.
 
 ## Maintainers: Supersede A Clean Release
 
-`abort` is only for a `frozen` state with no immutable release artifact; `fix-forward` is only for a terminal ClawHub security failure. If an immutable version was published successfully and reached pass/clean without a success receipt, then the same `master` advanced strictly with new canonical content, normal `RESUME=1` remains fail-closed and points to:
+`abort` is only for a `frozen` state with no immutable release artifact; `fix-forward` is only for a terminal ClawHub security failure. If an immutable version was published successfully and reached pass/clean without a success receipt, then the same `master` advanced strictly with new canonical content, normal `make publish` remains fail-closed and points to:
 
 ```bash
 make supersede
@@ -512,6 +512,6 @@ This command never repairs, overwrites, or deletes the published version and nev
 
 On success, the active state is atomically renamed on the same filesystem into private `.git/deyo-release/abandoned/` storage. Its audit preserves the original state, time, `security.status_not_clean` verdict/findings, current source snapshot, tag/tree/artifact fingerprint, and next target. The command itself does not modify the worktree or any external state. After repairing canonical content, run normal `make publish`. The publisher permits local `master` at the failed release commit while remote `master` remains at the old base only when the abandoned audit and all immutable evidence still match, then allocates the next patch from ClawHub's highest failed version. Remote `master` never advances until that next version is pass/clean; activation includes both commits in history and the verified fix-forward release must be the tip.
 
-Review failure summaries include the target version and a short reason code. Only an exact version, publisher identity, and fingerprint match at `tag_pushed`, with the sole terminal failure `security.status_not_clean` / `suspicious`, suggests `make fix-forward`. This still requires its full preflight and does not archive or publish automatically. Pending review or network failure suggests `make publish RESUME=1`; identity, fingerprint, or other terminal conflicts require stopping to inspect evidence, without automatic version allocation.
+Review failure summaries include the target version and a short reason code. Only an exact version, publisher identity, and fingerprint match at `tag_pushed`, with the sole terminal failure `security.status_not_clean` / `suspicious`, suggests `make fix-forward`. The ordinary publish command advances only after repaired canonical content and all evidence and candidate checks pass, retaining exact-version confirmation. Pending review or network failure suggests `make publish`; identity, fingerprint, or other terminal conflicts require stopping to inspect evidence, without automatic version allocation.
 
 The original recovery path requires local HEAD at the failed release commit and remote master at the frozen base. The new `synced-descendant` path requires identical local and remote master, strict ancestry from the failed commit, and changed canonical content. Confirmation rechecks source, commits, allocation and immutable evidence. Private audits additionally record the recovery path, local/remote commits and canonical tree hash; legacy audits remain supported. Normal publishing validates the matching audit even when local and remote master are identical, including the source snapshot, tag object, remote fingerprint and terminal verdict. Drift is rejected; the confirmed commit becomes the next release baseline.

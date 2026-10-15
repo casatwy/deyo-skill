@@ -72,7 +72,7 @@ const fs = require('node:fs')
 const { spawnSync } = require('node:child_process')
 const args = process.argv.slice(2)
 fs.appendFileSync(process.env.MOCK_GIT_LOG, JSON.stringify(args) + '\\n')
-if (args.join(' ') === 'remote get-url origin') {
+if (['remote get-url origin', 'remote get-url --push origin'].includes(args.join(' '))) {
   process.stdout.write('git@github.com:casatwy/deyo-skill.git\\n')
   process.exit(0)
 }
@@ -290,6 +290,7 @@ if (command === 'pnpm') {
   const failTarget = process.env.MOCK_PNPM_FAIL_ON_TARGET
   if (failTarget) {
     const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'deyo', 'manifest.json'), 'utf8'))
+    if (!fs.existsSync(path.join(process.cwd(), '.git'))) process.exit(0)
     const expectedVersion = failTarget === '1' ? '1.0.9' : failTarget
     if (manifest.skillVersion === expectedVersion) {
       process.stderr.write('simulated provider E2E failure after freeze\\n')
@@ -311,7 +312,7 @@ const runtime = {
   interactive: true,
   environment: process.env,
   confirm: async (expected) => {
-    if (process.env.MOCK_CONFIRM !== expected) {
+    if (!(process.env.MOCK_CONFIRM || '').split('|').includes(expected)) {
       throw new Error('simulated confirmation mismatch: expected ' + expected)
     }
     if (process.env.MOCK_CONFIRM_MUTATE_SOURCE === '1') {
@@ -1052,9 +1053,9 @@ test('pending review preserves one version and RESUME completes without republis
     assert.match(pending.stderr, /Resume the same version/)
     assert.match(pending.stderr, /\[release\] POLL ClawHub review:/)
     assert.match(pending.stderr, /recovery_phase=tag_pushed/)
-    assert.match(pending.stderr, /next="make publish RESUME=1"/)
+    assert.match(pending.stderr, /next="make publish"/)
     assert.equal((await readJson(fixture.statePath)).phase, 'tag_pushed')
-    const resumed = await fixture.formal(['--resume'], {
+    const resumed = await fixture.formal([], {
       MOCK_CONFIRM: 'resume deyo v1.0.9',
     })
     assert.equal(resumed.code, 0, resumed.stderr)
@@ -1087,13 +1088,13 @@ test('tag and master push failures retain phase and resume the same release', { 
         assert.match(failed.stderr, /\[release\] FAIL (Push immutable release tag|Push verified release to master)/)
         assert.match(failed.stderr, new RegExp(`recovery_phase=${failure.phase}`))
         assert.match(failed.stderr, /exit=42/)
-        assert.match(failed.stderr, /next="make publish RESUME=1"/)
+        assert.match(failed.stderr, /next="make publish"/)
         assert.equal(
           failed.stderr.match(new RegExp(`simulated ${failure.kind} push failure`, 'g'))?.length,
           1,
         )
         assert.equal((await readJson(fixture.statePath)).phase, failure.phase)
-        const resumed = await fixture.formal(['--resume'], {
+        const resumed = await fixture.formal([], {
           MOCK_CONFIRM: 'resume deyo v1.0.9',
         })
         assert.equal(resumed.code, 0, resumed.stderr)
@@ -1121,7 +1122,7 @@ test('clawhub-ready resume rejects projection evidence drift before activating m
     state.clawHubFileFingerprint = [{ path: 'SKILL.md', size: 1, sha256: 'e'.repeat(64) }]
     await writeFile(fixture.statePath, `${JSON.stringify(state, null, 2)}\n`)
 
-    const resumed = await fixture.formal(['--resume'], {
+    const resumed = await fixture.formal([], {
       MOCK_CONFIRM: 'resume deyo v1.0.9',
     })
     assert.equal(resumed.code, 1)
@@ -1141,7 +1142,7 @@ test('clean published release with later canonical master requires supersede, ar
   const fixture = await createFixture()
   try {
     const oldState = await createCleanAdvancedRelease(fixture)
-    const resumed = await fixture.formal(['--resume'], { MOCK_CONFIRM: 'resume deyo v1.0.9' })
+    const resumed = await fixture.formal([], { MOCK_CONFIRM: 'resume deyo v1.0.9' })
     assert.equal(resumed.code, 1)
     assert.match(resumed.stderr, /Run make supersede/)
 
@@ -1261,8 +1262,8 @@ test('clean supersede rejects state, evidence, environment, confirmation, and co
 test('review recovery hints preserve immutable release evidence', { timeout: 120_000 }, async (t) => {
   const cases = [
     { mode: 'terminal', next: 'make fix-forward' },
-    { mode: 'pending', next: 'make publish RESUME=1' },
-    { mode: 'network', next: 'make publish RESUME=1' },
+    { mode: 'pending', next: 'make publish' },
+    { mode: 'network', next: 'make publish' },
     { mode: 'terminal-wrong-owner', next: 'Stop and inspect release evidence' },
     { mode: 'terminal-wrong-version', next: 'Stop and inspect release evidence' },
     { mode: 'terminal-extra', next: 'Stop and inspect release evidence' },
@@ -1275,7 +1276,7 @@ test('review recovery hints preserve immutable release evidence', { timeout: 120
         const remoteBase = (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim()
         await createTerminalSecurityRelease(fixture)
         const before = await readJson(fixture.statePath)
-        const result = await fixture.formal(['--resume'], {
+        const result = await fixture.formal([], {
           MOCK_CONFIRM: 'resume deyo v1.0.9',
           MOCK_CLAWHUB_VERIFY: scenario.mode,
           MOCK_REVIEW_TIMEOUT_MS: '0',
@@ -1368,4 +1369,93 @@ test('synced terminal fix-forward rejects unchanged canonical and confirmation d
       } finally { await fixture.cleanup() }
     })
   }
+})
+
+
+test('ordinary publish completes the immutable version while preserving later canonical edits', { timeout: 45_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const pending = await fixture.formal([], {
+      MOCK_CONFIRM: 'publish deyo v1.0.9', MOCK_CLAWHUB_VERIFY: 'pending', MOCK_REVIEW_TIMEOUT_MS: '0',
+    })
+    assert.equal(pending.code, 1)
+    const canonical = path.join(fixture.repo, 'deyo/SKILL.md')
+    const changed = `${await readFile(canonical, 'utf8')}\n<!-- next version installation documentation -->\n`
+    await writeFile(canonical, changed)
+    const before = await readJson(fixture.statePath)
+    const dry = await fixture.cli(['--dry-run'])
+    assert.equal(dry.code, 0, dry.stderr)
+    assert.deepEqual(await readJson(fixture.statePath), before)
+    const resumed = await fixture.formal([], { MOCK_CONFIRM: 'resume deyo v1.0.9' })
+    assert.equal(resumed.code, 0, resumed.stderr)
+    assert.equal(await readFile(canonical, 'utf8'), changed)
+    assert.equal((await readJson(fixture.receiptPath)).skillVersion, '1.0.9')
+    const commands = (await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'commands.log'), 'utf8')).trim().split('\n').map(JSON.parse)
+    assert.equal(commands.filter(args => args[0] === 'publish' && !args.includes('--dry-run')).length, 1)
+  } finally { await fixture.cleanup() }
+})
+test('ordinary publish advances a repaired terminal release through guarded fix-forward', { timeout: 60_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    await createTerminalSecurityRelease(fixture)
+    const canonical = path.join(fixture.repo, 'deyo/SKILL.md')
+    await writeFile(canonical, `${await readFile(canonical, 'utf8')}\n<!-- explicitly authorized installation -->\n`)
+    const dry = await fixture.cli(['--dry-run'])
+    assert.equal(dry.code, 0, dry.stderr)
+    assert.equal((await readJson(fixture.statePath)).targetVersion, '1.0.9')
+    const result = await fixture.formal([], {
+      MOCK_CONFIRM: 'fix-forward deyo v1.0.9 to v1.0.10|publish deyo v1.0.10',
+    })
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal((await readJson(fixture.receiptPathFor('1.0.10'))).skillVersion, '1.0.10')
+  } finally { await fixture.cleanup() }
+})
+test('canonical-only edits pass dry-run without changing generated artifacts or Git refs', async () => {
+  const fixture = await createFixture()
+  try {
+    await writeFile(path.join(fixture.repo, 'deyo/SKILL.md'), (await readFile(path.join(fixture.repo, 'deyo/SKILL.md'), 'utf8')) + '\n<!-- canonical-only change -->\n')
+    const before = await readFile(path.join(fixture.repo, 'providers/metadata.json'), 'utf8')
+    const status = (await fixture.git(['status', '--porcelain'])).stdout
+    const result = await fixture.cli(['--dry-run'])
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal(await readFile(path.join(fixture.repo, 'providers/metadata.json'), 'utf8'), before)
+    assert.equal((await fixture.git(['status', '--porcelain'])).stdout, status)
+    await assertMissing(fixture.statePath)
+    const commands = await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'commands.log'), 'utf8')
+    assert.doesNotMatch(commands, /vox/i)
+    assert.equal(commands.trim().split('\n').map(JSON.parse).filter(args => args[0] === 'publish' && !args.includes('--dry-run')).length, 0)
+  } finally { await fixture.cleanup() }
+})
+
+test('existing immutable local or remote tag stops before freezing', async (t) => {
+  for (const remote of [false, true]) await t.test(remote ? 'remote' : 'local', async () => {
+    const fixture = await createFixture()
+    try {
+      await fixture.git(['tag', 'v1.0.9'])
+      if (remote) {
+        await fixture.git(['push', 'origin', 'refs/tags/v1.0.9'])
+        await fixture.git(['tag', '-d', 'v1.0.9'])
+      }
+      const result = await fixture.cli(['--dry-run'])
+      assert.equal(result.code, 1)
+      assert.match(result.stderr, /tag v1.0.9 exists/)
+      await assertMissing(fixture.statePath)
+    } finally { await fixture.cleanup() }
+  })
+})
+
+test('Git pointer file stores recovery state in the resolved Git directory', async () => {
+  const fixture = await createFixture()
+  try {
+    const gitDirectory = path.join(fixture.parent, 'separate-git')
+    await (await import('node:fs/promises')).rename(path.join(fixture.repo, '.git'), gitDirectory)
+    await writeFile(path.join(fixture.repo, '.git'), `gitdir: ${gitDirectory}\n`)
+    const result = await fixture.formal([], { MOCK_CONFIRM: 'publish deyo v1.0.9', MOCK_CLAWHUB_VERIFY: 'pending', MOCK_REVIEW_TIMEOUT_MS: '1' })
+    assert.equal(result.code, 1, result.stderr)
+    const state = await readJson(path.join(gitDirectory, 'deyo-release/state.json'))
+    assert.equal(state.phase, 'tag_pushed')
+    const resumed = await fixture.formal([], { MOCK_CONFIRM: 'resume deyo v1.0.9' })
+    assert.equal(resumed.code, 0, resumed.stderr)
+    await access(path.join(gitDirectory, 'deyo-release/receipts/v1.0.9.json'))
+  } finally { await fixture.cleanup() }
 })
