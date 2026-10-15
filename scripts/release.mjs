@@ -1242,10 +1242,37 @@ async function isolatedInstallAndVerify(state, localFingerprint) {
   }
 }
 
+function reviewConflict(state, error, inspect, verification, localFingerprint) {
+  let next = 'Stop and inspect release evidence'
+  let reason = 'review.evidence_conflict'
+  try {
+    terminalSecurityEvidence(verification, state.targetVersion)
+    if (
+      state.phase === 'tag_pushed' &&
+      inspect?.version?.version === state.targetVersion &&
+      compareFingerprints(localFingerprint, remoteFileFingerprint(inspect))
+    ) {
+      next = 'make fix-forward'
+      reason = 'security.status_not_clean'
+    }
+  }
+  catch {
+    // Only the existing terminal-security predicate can recommend fix-forward.
+  }
+  currentProgressReporter()?.setRecovery(state.phase, next)
+  return new ClawHubConflictError(`ClawHub ${state.targetVersion} [${reason}]: ${error.message}. Next: ${next}`)
+}
+
 async function waitForClawHub(state, stage, runtime = {}) {
   const localFingerprint = await clawHubFileFingerprint(stage)
   await progressStage('Publish ClawHub exact version', async () => {
-    await publishClawHubIfNeeded(state, stage, localFingerprint)
+    try {
+      await publishClawHubIfNeeded(state, stage, localFingerprint)
+    }
+    catch (error) {
+      if (error instanceof ClawHubConflictError) throw reviewConflict(state, error)
+      throw error
+    }
   })
   return await progressStage('Wait for ClawHub review', async () => {
     const reviewTimeoutMs = runtime.reviewTimeoutMs ?? 10 * 60 * 1000
@@ -1255,8 +1282,9 @@ async function waitForClawHub(state, stage, runtime = {}) {
     const deadline = startedAt + reviewTimeoutMs
     let lastReason = 'ClawHub review is pending'
     while (Date.now() <= deadline) {
+      let inspect, verification
       try {
-        const [inspect, verification] = await Promise.all([
+        [inspect, verification] = await Promise.all([
           inspectExact(state.targetVersion),
           verifyExact(state.targetVersion),
         ])
@@ -1276,7 +1304,9 @@ async function waitForClawHub(state, stage, runtime = {}) {
         })
       }
       catch (error) {
-        if (error instanceof ClawHubConflictError) throw error
+        if (error instanceof ClawHubConflictError) {
+          throw reviewConflict(state, error, inspect, verification, localFingerprint)
+        }
         lastReason = error instanceof Error ? error.message : String(error)
         const remaining = Math.max(0, deadline - Date.now())
         const next = Math.min(reviewPollMs, remaining)
@@ -1289,7 +1319,7 @@ async function waitForClawHub(state, stage, runtime = {}) {
         await sleep(next)
       }
     }
-    throw new Error(`${lastReason}. Resume the same version with: make publish RESUME=1`)
+    throw new Error(`ClawHub ${state.targetVersion} [review.retryable]: ${lastReason}. Resume the same version with: make publish RESUME=1`)
   })
 }
 

@@ -511,3 +511,5 @@ make fix-forward
 该命令不修复、覆盖或删除已发布版本，也不移动 tag、`latest` 或远端 `master`。它在确认前后分别在线核对官方 origin/upstream、local/remote master、local/remote tag、完整 ClawHub 版本历史、精确版本与下一 patch、tag archive fingerprint、terminal verification verdict，并拒绝 CI、非交互终端、成功 receipt、非 `tag_pushed` state、pending/review、额外失败原因或任何漂移。确认短语固定为 `fix-forward deyo v<失败版本> to v<下一 patch>`。
 
 成功后，active state 会通过同文件系统原子 rename 归档到权限受限的 `.git/deyo-release/abandoned/`；audit 保存原 state、时间、`security.status_not_clean` verdict/findings、当前 source snapshot、tag/tree/artifact fingerprint 与下一目标。命令本身不修改工作树或外部状态。维护者随后修复 canonical 内容并执行普通 `make publish`；发布器只有在 abandoned audit 和所有不可变证据仍一致时，才允许本地 `master` 位于失败 release commit 而远端 `master` 仍在旧基线，并自动从 ClawHub 最高失败版本分配下一 patch。下一版本通过 pass/clean 前绝不推进远端 `master`；激活时历史会同时包含失败 commit 和修复 commit，tip 必须是通过验证的新版本。
+
+审核失败摘要显示目标版本和简短原因码。仅 `tag_pushed` 下精确版本、发布者身份与文件指纹匹配，且唯一终态失败为 `security.status_not_clean` / `suspicious` 时提示 `make fix-forward`；它仍须运行完整预检，不自动归档或发布。等待或网络失败提示 `make publish RESUME=1`；身份、指纹或其他终态冲突要求停止检查证据，不自动换版本。

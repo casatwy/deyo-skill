@@ -210,11 +210,15 @@ if (args[0] === 'publish') {
 }
 if (args[0] === 'skill' && args[1] === 'verify') {
   const mode = process.env.MOCK_CLAWHUB_VERIFY || 'pass'
+  if (mode === 'network') {
+    process.stderr.write('simulated verification network failure')
+    process.exit(7)
+  }
   if (mode.startsWith('terminal')) {
     const requested = args[args.indexOf('--version') + 1]
     process.stdout.write(JSON.stringify({
       slug: 'deyo',
-      publisherHandle: 'casatwy',
+      publisherHandle: mode === 'terminal-wrong-owner' ? 'other' : 'casatwy',
       version: mode === 'terminal-wrong-version' ? '9.9.9' : requested,
       resolvedFrom: 'version',
       ok: false,
@@ -478,6 +482,8 @@ async function createTerminalSecurityRelease(fixture) {
   })
   assert.equal(result.code, 1)
   assert.match(result.stderr, /verification rejected|security/i)
+  assert.match(result.stderr, /next="make fix-forward"/)
+  assert.match(result.stderr, /1\.0\.9 \[security\.status_not_clean\]/)
   const state = await readJson(fixture.statePath)
   assert.equal(state.phase, 'tag_pushed')
   assert.equal(state.targetVersion, '1.0.9')
@@ -1235,6 +1241,47 @@ test('clean supersede rejects state, evidence, environment, confirmation, and co
         assert.match(result.stderr, scenario.expected)
         await access(fixture.statePath)
         await assertMissing(fixture.supersededDirectory)
+      }
+      finally {
+        await fixture.cleanup()
+      }
+    })
+  }
+})
+
+
+test('review recovery hints preserve immutable release evidence', { timeout: 120_000 }, async (t) => {
+  const cases = [
+    { mode: 'terminal', next: 'make fix-forward' },
+    { mode: 'pending', next: 'make publish RESUME=1' },
+    { mode: 'network', next: 'make publish RESUME=1' },
+    { mode: 'terminal-wrong-owner', next: 'Stop and inspect release evidence' },
+    { mode: 'terminal-wrong-version', next: 'Stop and inspect release evidence' },
+    { mode: 'terminal-extra', next: 'Stop and inspect release evidence' },
+    { mode: 'terminal', fingerprint: true, next: 'Stop and inspect release evidence' },
+  ]
+  for (const scenario of cases) {
+    await t.test(`${scenario.mode}${scenario.fingerprint ? '-fingerprint' : ''}`, async () => {
+      const fixture = await createFixture()
+      try {
+        const remoteBase = (await fixture.git(['rev-parse', 'origin/master'])).stdout.trim()
+        await createTerminalSecurityRelease(fixture)
+        const before = await readJson(fixture.statePath)
+        const result = await fixture.formal(['--resume'], {
+          MOCK_CONFIRM: 'resume deyo v1.0.9',
+          MOCK_CLAWHUB_VERIFY: scenario.mode,
+          MOCK_REVIEW_TIMEOUT_MS: '0',
+          ...(scenario.fingerprint ? { MOCK_CLAWHUB_FINGERPRINT_MISMATCH: '1' } : {}),
+        })
+        assert.equal(result.code, 1, result.stderr)
+        assert.ok(result.stderr.includes(`next="${scenario.next}"`), result.stderr)
+        assert.match(result.stderr, /ClawHub 1\.0\.9 \[(security.status_not_clean|review.evidence_conflict|review.retryable)\]/)
+        if (scenario.next !== 'make fix-forward') assert.doesNotMatch(result.stderr, /next="make fix-forward"/)
+        assert.deepEqual(await readJson(fixture.statePath), before)
+        assert.equal((await fixture.git(['rev-parse', 'origin/master'])).stdout.trim(), remoteBase)
+        const commands = (await readFile(path.join(fixture.env.MOCK_CLAWHUB_STATE, 'commands.log'), 'utf8'))
+          .trim().split('\n').map(line => JSON.parse(line))
+        assert.equal(commands.filter(args => args[0] === 'publish' && !args.includes('--dry-run')).length, 1)
       }
       finally {
         await fixture.cleanup()

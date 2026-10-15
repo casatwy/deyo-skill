@@ -47,13 +47,14 @@ deyo skill _openclaw-check --scope global
 
 - Prefer the installed `deyo` command. Check with `command -v deyo`, then inspect `deyo --help` and `deyo --version`.
 - Require CLI `0.2.2` or newer for the consent-gated OpenClaw update manager and automatic language detection when `--language` is omitted. Also verify that help lists `--stream-transcript`, `--progress-format`, `--file`, `--mime-type`, and `verbose_json`.
-- If the command or required capability is missing, install or upgrade the published CLI:
+- If the command is missing, the version is too old, or a required capability (including streaming) is missing, first explain the detected problem and show this exact global install/upgrade command:
 
 ```bash
 npm install -g @casatwy/deyo@^0.2.0
 ```
 
-- For Claude Code, prefer the current plugin/marketplace path from the Deyo install page. Use legacy `~/.claude/skills/deyo` installation only as a fallback when the user explicitly asks for it or the plugin path is unavailable.
+- Execute the command only when the current request explicitly authorizes this installation or upgrade, or the user subsequently explicitly agrees. A normal transcription request does not authorize installation or upgrade. If authorization is missing, ask before executing; if already explicitly authorized, do not ask again. If the user declines, do not install or upgrade; explain the blocked capability and stop the affected workflow.
+- For Claude Code, prefer the current plugin/marketplace path from the Deyo install page. Use legacy `~/.claude/skills/deyo` installation only as a fallback when the user explicitly asks for it or the plugin path is unavailable. Plugin and fallback installation follow the same authorization rule above; an unavailable plugin path is not installation consent.
 - Do not modify global git config, SSH keys, npm registry, or plugin manifests to work around installation failures. Preserve the raw error and stop unless the user explicitly authorizes a change.
 
 ## Auth And Base URL
@@ -230,7 +231,7 @@ Progress/status remains on stderr. Upload JSON is redacted by the CLI/server so 
 ## Interruptions And Failures
 
 - Keep SIGINT semantics unchanged: stop local waiting; do not claim the server-side task was cancelled. Upload may be aborted only if interruption occurs before upload completion.
-- If streaming is unavailable on an older CLI, upgrade first. Do not silently pretend post-completion text is live streaming.
+- If streaming is unavailable, follow Install And Discovery above: explain the missing capability, show the exact upgrade command, and execute only with explicit installation/upgrade authorization. Do not silently pretend post-completion text is live streaming.
 - If the model is unavailable, still complete the CLI task, clearly state that cleanup fell back to Whisper raw text, and write the raw text to the safe final `.txt` path.
 - Preserve raw CLI/service errors for authentication, balance, upload, media, unsupported-source, and network failures. Do not invent a successful transcript.
 
