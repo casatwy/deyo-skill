@@ -504,7 +504,10 @@ async function fullPreflight({ resume, state }) {
     return { inspect, allocation }
   })
   let remoteBaseCommit = null
-  if (localHead !== remoteMaster) {
+  const pendingFixForward = (await abandonedFixForwardAudits()).some(audit => (
+    audit.state?.targetVersion === allocation.baseVersion && audit.nextTarget === allocation.targetVersion
+  ))
+  if (localHead !== remoteMaster || pendingFixForward) {
     await authorizeAbandonedFixForwardBase({ localHead, remoteMaster, allocation, inspect })
     remoteBaseCommit = remoteMaster
   }
@@ -676,6 +679,9 @@ async function tagEvidence(state) {
     throw new Error(`Remote tag ${state.tag} does not resolve to the frozen release commit`)
   }
 
+  const localTagObject = (await git(['rev-parse', `refs/tags/${state.tag}`])).stdout.trim()
+  if (localTagObject !== tagObject) throw new Error('Local tag object differs from remote immutable tag')
+
   const stage = await archiveTaggedSkill(state.tag)
   try {
     const treeHash = await hashTree(stage)
@@ -713,12 +719,21 @@ async function terminalFixForwardPreflight(state) {
   }
 
   const localHead = (await git(['rev-parse', 'HEAD'])).stdout.trim()
-  if (localHead !== frozen.releaseCommit) {
-    throw new Error('Cannot fix-forward because local master no longer matches the failed release commit')
-  }
   const remoteMaster = await remoteMasterCommit()
-  if (remoteMaster !== expectedRemoteBase) {
-    throw new Error('Cannot fix-forward because origin/master no longer matches the frozen base commit')
+  const recoveryPath = localHead === frozen.releaseCommit ? 'failed-head' : 'synced-descendant'
+  if (recoveryPath === 'failed-head') {
+    if (remoteMaster !== expectedRemoteBase) {
+      throw new Error('Cannot fix-forward because origin/master no longer matches the frozen base commit')
+    }
+  }
+  else {
+    if (localHead !== remoteMaster) throw new Error('Cannot fix-forward unless local master and origin/master are identical')
+    const ancestor = await git(['merge-base', '--is-ancestor', frozen.releaseCommit, localHead], { allowFailure: true })
+    assertStrictAncestor(frozen.releaseCommit, localHead, ancestor.code === 0)
+  }
+  const currentCanonicalTreeHash = await hashTree(path.join(root, 'deyo'))
+  if (recoveryPath === 'synced-descendant' && currentCanonicalTreeHash === frozen.canonicalTreeHash) {
+    throw new Error('Cannot fix-forward because current canonical tree does not differ from the frozen release')
   }
 
   const tag = await tagEvidence(frozen)
@@ -753,6 +768,9 @@ async function terminalFixForwardPreflight(state) {
 
   return {
     state: frozen,
+    recoveryPath,
+    localHead,
+    currentCanonicalTreeHash,
     currentSourceSnapshot: await sourceSnapshot(frozen.targetVersion, nextTarget),
     nextTarget,
     remoteMaster,
@@ -792,6 +810,9 @@ async function archiveTerminalFixForward(originalState, preflight) {
     schema: 1,
     kind: 'deyo.terminal-security-fix-forward',
     state: originalState,
+    recoveryPath: preflight.recoveryPath,
+    localHead: preflight.localHead,
+    currentCanonicalTreeHash: preflight.currentCanonicalTreeHash,
     abandonedAt: new Date().toISOString(),
     reason: 'security.status_not_clean',
     terminalSecurity: preflight.terminalSecurity,
@@ -836,6 +857,11 @@ async function fixForwardTerminalRelease(state, runtime = {}) {
   ))
   if (final.currentSourceSnapshot !== initial.currentSourceSnapshot) {
     throw new Error('Release source changed while fix-forward was being confirmed')
+  }
+  for (const key of ['recoveryPath', 'localHead', 'remoteMaster', 'currentCanonicalTreeHash', 'nextTarget', 'tag', 'terminalSecurity']) {
+    if (JSON.stringify(initial[key]) !== JSON.stringify(final[key])) {
+      throw new Error(`Fix-forward evidence changed while confirming: ${key}`)
+    }
   }
   return await progressStage('Archive terminal fix-forward state', async () => (
     await archiveTerminalFixForward(state, final)
@@ -1057,8 +1083,9 @@ async function authorizeAbandonedFixForwardBase({ localHead, remoteMaster, alloc
     const failed = validateTerminalFixForwardState(audit.state)
     const expectedRemoteBase = failed.remoteBaseCommit ?? failed.baseCommit
     if (
-      failed.releaseCommit === localHead &&
-      expectedRemoteBase === remoteMaster &&
+      (audit.recoveryPath === 'synced-descendant'
+        ? audit.localHead === localHead && localHead === remoteMaster
+        : failed.releaseCommit === localHead && expectedRemoteBase === remoteMaster) &&
       failed.targetVersion === allocation.baseVersion &&
       audit.nextTarget === allocation.targetVersion
     ) candidates.push({ audit, failed })
@@ -1071,13 +1098,26 @@ async function authorizeAbandonedFixForwardBase({ localHead, remoteMaster, alloc
     audit.reason !== 'security.status_not_clean' ||
     !/^[a-f0-9]{64}$/.test(audit.currentSourceSnapshot ?? '') ||
     audit.remoteMaster !== remoteMaster ||
-    audit.tagCommit !== localHead ||
+    audit.tagCommit !== failed.releaseCommit ||
     audit.tagArchiveTreeHash !== failed.canonicalTreeHash ||
     !Array.isArray(audit.artifactFingerprint)
   ) {
     throw new Error('Terminal-security fix-forward archive is incomplete or inconsistent')
   }
   terminalSecurityEvidence({ ok: false, ...audit.terminalSecurity }, failed.targetVersion)
+  if (audit.recoveryPath && !['failed-head', 'synced-descendant'].includes(audit.recoveryPath)) {
+    throw new Error('Unknown fix-forward recovery path')
+  }
+  if (audit.recoveryPath === 'synced-descendant') {
+    const ancestor = await git(['merge-base', '--is-ancestor', failed.releaseCommit, localHead], { allowFailure: true })
+    assertStrictAncestor(failed.releaseCommit, localHead, ancestor.code === 0)
+    if (
+      audit.currentSourceSnapshot !== await sourceSnapshot(failed.targetVersion, allocation.targetVersion) ||
+      audit.currentCanonicalTreeHash !== await hashTree(path.join(root, 'deyo')) ||
+      audit.currentCanonicalTreeHash === failed.canonicalTreeHash
+    ) throw new Error('Archived fix-forward source snapshot changed')
+  }
+
   const ancestor = await git(['merge-base', '--is-ancestor', remoteMaster, localHead], { allowFailure: true })
   if (ancestor.code !== 0) throw new Error('Failed release commit is not a fast-forward descendant of origin/master')
   if (inspect.skill?.tags?.latest !== allocation.baseVersion) {
@@ -1087,7 +1127,7 @@ async function authorizeAbandonedFixForwardBase({ localHead, remoteMaster, alloc
     throw new Error(`Abandoned release v${failed.targetVersion} has a success receipt`)
   }
   const tag = await tagEvidence(failed)
-  if (!compareFingerprints(audit.artifactFingerprint, tag.fingerprint)) {
+  if (audit.tagObject !== tag.tagObject || !compareFingerprints(audit.artifactFingerprint, tag.fingerprint)) {
     throw new Error('Abandoned artifact fingerprint differs from the immutable tag archive')
   }
   const exact = await inspectExact(failed.targetVersion)
@@ -1097,6 +1137,7 @@ async function authorizeAbandonedFixForwardBase({ localHead, remoteMaster, alloc
   ) {
     throw new Error('Abandoned ClawHub artifact no longer matches the immutable tag archive')
   }
+  terminalSecurityEvidence(await verifyExact(failed.targetVersion), failed.targetVersion)
   return audit
 }
 

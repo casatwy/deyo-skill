@@ -209,7 +209,10 @@ if (args[0] === 'publish') {
   process.exit(0)
 }
 if (args[0] === 'skill' && args[1] === 'verify') {
-  const mode = process.env.MOCK_CLAWHUB_VERIFY || 'pass'
+  const requestedVersion = args[args.indexOf('--version') + 1]
+  const terminalMarker = path.join(stateRoot, 'terminal-' + requestedVersion)
+  const mode = process.env.MOCK_CLAWHUB_VERIFY || (fs.existsSync(terminalMarker) ? 'terminal' : 'pass')
+  if (mode === 'terminal') fs.writeFileSync(terminalMarker, '1')
   if (mode === 'network') {
     process.stderr.write('simulated verification network failure')
     process.exit(7)
@@ -795,6 +798,11 @@ test('terminal security fix-forward archives 1.0.9 and activates only pass-clean
     assert.equal((await stat(archivedStatePath)).mode & 0o777, 0o600)
     assert.deepEqual((await readJson(auditPath)).state, failed)
     assert.deepEqual(await readJson(archivedStatePath), failed)
+    const legacyAudit = await readJson(auditPath)
+    delete legacyAudit.recoveryPath
+    delete legacyAudit.localHead
+    delete legacyAudit.currentCanonicalTreeHash
+    await writeFile(auditPath, JSON.stringify(legacyAudit))
 
     const canonicalPath = path.join(fixture.repo, 'deyo', 'SKILL.md')
     await writeFile(canonicalPath, `${await readFile(canonicalPath, 'utf8')}\n<!-- simulated terminal-security fix -->\n`)
@@ -1286,6 +1294,78 @@ test('review recovery hints preserve immutable release evidence', { timeout: 120
       finally {
         await fixture.cleanup()
       }
+    })
+  }
+})
+
+async function syncTerminalFix(fixture, changeCanonical = true) {
+  if (changeCanonical) {
+    const canonical = path.join(fixture.repo, 'deyo', 'SKILL.md')
+    await writeFile(canonical, `${await readFile(canonical, 'utf8')}\n<!-- explicit installation consent fix -->\n`)
+    await checked(process.execPath, ['scripts/generate-providers.mjs'], { cwd: fixture.repo, env: process.env })
+  }
+  await fixture.git(['add', '-A'])
+  await fixture.git(['commit', '--allow-empty', '-m', 'synchronize reviewed fix'])
+  await fixture.git(['push', 'origin', 'HEAD:refs/heads/master'])
+}
+
+test('synced terminal fix-forward archives evidence and publishes the next patch', { timeout: 90_000 }, async () => {
+  const fixture = await createFixture()
+  try {
+    const failed = await createTerminalSecurityRelease(fixture)
+    await syncTerminalFix(fixture)
+    const base = (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()
+    const result = await fixture.formal(['--fix-forward'], { MOCK_CONFIRM: 'fix-forward deyo v1.0.9 to v1.0.10' })
+    assert.equal(result.code, 0, result.stderr)
+    const audit = JSON.parse(result.stdout.trim().split('\n').at(-1))
+    assert.equal(audit.recoveryPath, 'synced-descendant')
+    assert.equal(audit.localHead, base)
+    assert.equal(audit.remoteMaster, base)
+    assert.equal(audit.tagCommit, failed.releaseCommit)
+    const auditPath = path.join(fixture.repo, audit.archivePath)
+    await writeFile(auditPath, JSON.stringify({ ...audit, tagObject: 'f'.repeat(40) }))
+    const rejected = await fixture.cli(['--dry-run'])
+    assert.equal(rejected.code, 1)
+    assert.match(rejected.stderr, /immutable tag archive/)
+    await writeFile(auditPath, JSON.stringify(audit))
+    const notesPath = path.join(fixture.repo, 'release', 'next.md')
+    const notes = await readFile(notesPath, 'utf8')
+    await writeFile(notesPath, `${notes}\n- Unconfirmed change.\n`)
+    const sourceDrift = await fixture.cli(['--dry-run'])
+    assert.equal(sourceDrift.code, 1)
+    assert.match(sourceDrift.stderr, /source snapshot changed/)
+    await writeFile(notesPath, notes)
+    const released = await fixture.formal([], { MOCK_CONFIRM: 'publish deyo v1.0.10' })
+    assert.equal(released.code, 0, released.stderr)
+    assert.equal((await fixture.git(['rev-parse', 'HEAD^'])).stdout.trim(), base)
+    assert.equal((await readJson(fixture.receiptPathFor('1.0.10'))).skillVersion, '1.0.10')
+    await assertMissing(fixture.statePath)
+    await assertMissing(fixture.receiptPathFor('1.0.9'))
+  } finally { await fixture.cleanup() }
+})
+
+test('synced terminal fix-forward rejects unchanged canonical and confirmation drift', { timeout: 90_000 }, async (t) => {
+  for (const scenario of ['unchanged', 'drift', 'pending', 'owner', 'network', 'nonancestor']) {
+    await t.test(scenario, async () => {
+      const fixture = await createFixture()
+      try {
+        await createTerminalSecurityRelease(fixture)
+        if (scenario === 'nonancestor') {
+          const failed = await readJson(fixture.statePath)
+          await fixture.git(['reset', '--hard', failed.baseCommit])
+        }
+        await syncTerminalFix(fixture, scenario !== 'unchanged')
+        const result = await fixture.formal(['--fix-forward'], {
+          MOCK_CONFIRM: 'fix-forward deyo v1.0.9 to v1.0.10',
+          ...(scenario === 'drift' ? { MOCK_CONFIRM_MUTATE_SOURCE: '1' } : {}),
+          ...(scenario === 'pending' ? { MOCK_CLAWHUB_VERIFY: 'pending' } : {}),
+          ...(scenario === 'owner' ? { MOCK_CLAWHUB_VERIFY: 'terminal-wrong-owner' } : {}),
+          ...(scenario === 'network' ? { MOCK_CLAWHUB_VERIFY: 'network' } : {}),
+        })
+        assert.equal(result.code, 1, result.stderr)
+        await access(fixture.statePath)
+        await assertMissing(fixture.abandonedDirectory)
+      } finally { await fixture.cleanup() }
     })
   }
 })

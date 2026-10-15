@@ -502,7 +502,7 @@ make supersede
 
 ## 维护者：terminal security fix-forward
 
-只有发布已精确停在 `tag_pushed`，ClawHub 不可变精确版本存在且 `latest` 指向该版本、artifact 与 tag archive 完全一致、远端 `master` 仍停在发布前基线，并且 ClawHub verification 的唯一终态失败是 `security.status_not_clean` 时，才可运行：
+只有发布已精确停在 `tag_pushed`，ClawHub 不可变精确版本存在且 `latest` 指向该版本、artifact 与 tag archive 完全一致、Git 基线符合下述两条路径之一，并且 ClawHub verification 的唯一终态失败是 `security.status_not_clean` 时，才可运行：
 
 ```bash
 make fix-forward
@@ -513,3 +513,5 @@ make fix-forward
 成功后，active state 会通过同文件系统原子 rename 归档到权限受限的 `.git/deyo-release/abandoned/`；audit 保存原 state、时间、`security.status_not_clean` verdict/findings、当前 source snapshot、tag/tree/artifact fingerprint 与下一目标。命令本身不修改工作树或外部状态。维护者随后修复 canonical 内容并执行普通 `make publish`；发布器只有在 abandoned audit 和所有不可变证据仍一致时，才允许本地 `master` 位于失败 release commit 而远端 `master` 仍在旧基线，并自动从 ClawHub 最高失败版本分配下一 patch。下一版本通过 pass/clean 前绝不推进远端 `master`；激活时历史会同时包含失败 commit 和修复 commit，tip 必须是通过验证的新版本。
 
 审核失败摘要显示目标版本和简短原因码。仅 `tag_pushed` 下精确版本、发布者身份与文件指纹匹配，且唯一终态失败为 `security.status_not_clean` / `suspicious` 时提示 `make fix-forward`；它仍须运行完整预检，不自动归档或发布。等待或网络失败提示 `make publish RESUME=1`；身份、指纹或其他终态冲突要求停止检查证据，不自动换版本。
+
+受控恢复支持两条路径：原路径要求本地 HEAD 为失败 release commit、远端 master 为冻结基线；新增 `synced-descendant` 路径要求本地 HEAD 与远端 master 相同，失败 commit 是严格祖先，当前 canonical tree 已改变。确认前后重查源码、提交、版本分配与不可变证据。归档额外保存恢复路径、本地和远端提交及 canonical tree hash；旧归档仍兼容。后续普通发布即使本地与远端相同，也必须验证对应归档、当前源码快照、tag object、远端指纹与终态审核；任何漂移均拒绝。新版本使用该已确认提交作为基线。
